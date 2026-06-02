@@ -66,14 +66,20 @@ function ClientDashboard() {
 
         const result = await response.json();
         if (result.cases) {
-          const mappedCases = result.cases.map(c => ({
-            id: c.caseid,
+          const mappedCases = result.cases.map((c) => ({
+            id: c.id || c.caseid,
             title: c.title,
             description: c.description,
-            caseType: c.casetype,
-            filingDate: c.filingdate,
+            caseType: c.caseType || c.casetype,
+            filingDate: c.filingDate || c.filingdate,
             status: c.status,
-            history: c.history || []
+            lawyers: c.lawyers || 'N/A',
+            courtName: c.courtName || 'N/A',
+            nextHearing: c.nextHearing || 'N/A',
+            history: c.history || [],
+            evidence: c.evidence || [],
+            witnesses: c.witnesses || [],
+            finalDecision: c.finalDecision || null,
           }));
 
           setCases(mappedCases);

@@ -32,10 +32,8 @@ const JudgeProfile = () => {
       try {
         const res = await fetch('/api/judgeprofile', {
           method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('userToken')}`,
-          },
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
         });
 
         const result = await res.json();
@@ -84,10 +82,8 @@ const JudgeProfile = () => {
     try {
       const res = await fetch('/api/judgeprofile', {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('userToken')}`,
-        },
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(profileData),
       });
 

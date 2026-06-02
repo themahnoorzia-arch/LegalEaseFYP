@@ -4,7 +4,7 @@ Script to create all database tables for the Legal Case Management System
 """
 
 from models import Base
-from app import engine
+from db.db import engine
 from config import Config
 
 def create_tables():

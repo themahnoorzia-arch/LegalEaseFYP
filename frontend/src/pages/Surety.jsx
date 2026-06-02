@@ -23,6 +23,10 @@ const Surety = () => {
       if (!response.ok) throw new Error('Failed to fetch surety');
 
       const data = await response.json();
+      if (!data.suretyid) {
+        setSuretyData([]);
+        return;
+      }
       setSuretyData([{
         id: data.suretyid,
         firstname: data.firstname,
@@ -32,24 +36,12 @@ const Surety = () => {
         email: data.email,
         address: data.address,
         pasthistory: data.pasthistory,
-        caseName: `Case #${data.caseid}`
+        caseName: data.casename || `Case #${data.caseid || ''}`
       }]);
     } catch (error) {
       console.error(error);
-      setFallbackWarning("Failed to load surety. Showing mock data.");
-      setSuretyData([
-        {
-          id: 1,
-          firstname: 'Ali',
-          lastname: 'Khan',
-          cnic: '12345-6789012-3',
-          phone: '03001234567',
-          email: 'ali.khan@email.com',
-          address: '123 Main St',
-          pasthistory: 'No previous surety',
-          caseName: 'Mock Case 1'
-        }
-      ]);
+      setFallbackWarning("Could not load surety records.");
+      setSuretyData([]);
     }
   };
 

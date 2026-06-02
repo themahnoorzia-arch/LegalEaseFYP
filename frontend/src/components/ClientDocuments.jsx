@@ -34,9 +34,11 @@ Removed the add document functionality for client, uncomment if needed
           credentials: 'include',
         });
 
-        if (!res.ok) throw new Error('Failed to fetch documents');
-
         const result = await res.json();
+        if (!res.ok || result.success === false) {
+          throw new Error(result.message || 'Failed to fetch documents');
+        }
+
         const docs = result.documents || result.data || [];
 
         // Normalize backend fields to frontend keys

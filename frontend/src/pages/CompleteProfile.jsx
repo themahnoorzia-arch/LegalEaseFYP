@@ -16,7 +16,7 @@ const roleFieldMap = {
     { name: 'position', label: 'Position', type: 'text', placeholder: 'Registrar Position', required: true }
   ],
   'Lawyer': [
-    { name: 'barLicense', label: 'Bar License No', type: 'text', placeholder: '123456', required: true },
+    { name: 'barLicense', label: 'Bar License No', type: 'number', placeholder: '123456', required: true },
     { name: 'experience', label: 'Experience (years)', type: 'number', placeholder: '5', required: true },
     { name: 'specialization', label: 'Specialization', type: 'text', placeholder: 'e.g. Civil Law', required: true }
   ],
@@ -69,7 +69,7 @@ const CompleteProfile = () => {
       for (const field of fields) {
         const value = form[field.name];
         if (field.required && (!value || value.trim() === '')) {
-          setError('${field.label} is required.');
+          setError(`${field.label} is required.`);
           return false;
         }
       }
@@ -96,35 +96,38 @@ const CompleteProfile = () => {
     setIsLoading(true);
 
     try {
-      // Prepare the profile data to send to the backend
-      const normalizedRole = role.toLowerCase();
-const profileData = {
-  ...form,
-  role: normalizedRole, // Normalize the role to lowercase here
-};
+      const userId = localStorage.getItem('user_id');
+      if (!userId) {
+        setError('Session expired. Please sign up or log in again.');
+        setIsLoading(false);
+        return;
+      }
 
+      const profileData = {
+        ...form,
+        user_id: Number(userId),
+      };
 
-      // Make the API call
       const response = await fetch('/api/complete-profile', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('userToken')}`
         },
+        credentials: 'include',
         body: JSON.stringify(profileData)
       });
 
       const result = await response.json();
 
       if (!response.ok || !result.success) {
-        throw new Error('Profile completion failed');
+        throw new Error(result.message || 'Profile completion failed');
       }
 
       // Navigate based on role
       if (role === 'CourtRegistrar') {
         navigate('/register-court');
       } else if (role === 'Lawyer') {
-        navigate('/Dashboard');
+        navigate('/dashboard');
       } else if (role === 'Client') {
         navigate('/ClientDashboard');
       } else if (role === 'Judge') {
@@ -135,7 +138,7 @@ const profileData = {
         navigate('/dashboard');
       }
     } catch (err) {
-      setError('Profile completion failed. Please try again.');
+      setError(err.message || 'Profile completion failed. Please try again.');
       console.error('Error:', err);
     } finally {
       setIsLoading(false);

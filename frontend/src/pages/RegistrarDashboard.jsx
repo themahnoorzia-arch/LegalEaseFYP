@@ -59,6 +59,9 @@ const RegistrarDashboard = () => {
     judgename: '',
     prosecutorname: ''
   });
+  const [caseNumber, setCaseNumber] = useState('');
+  const [respondentLawyerId, setRespondentLawyerId] = useState('');
+  const [lawyerOptions, setLawyerOptions] = useState([]);
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [verifyError, setVerifyError] = useState('');
   const [verifySuccess, setVerifySuccess] = useState('');
@@ -202,6 +205,8 @@ useEffect(() => {
   const [errorCases, setErrorCases] = useState(null);
   const [loadingCases, setLoadingCases] = useState(true);
   const [error, setError] = useState(null);
+  const [joinRequests, setJoinRequests] = useState([]);
+  const [joinRequestsLoading, setJoinRequestsLoading] = useState(false);
 
   // Fetch court cases for CourtRegistrar role
   useEffect(() => {
@@ -222,6 +227,77 @@ useEffect(() => {
 
   fetchCourtCases();
 }, []);
+
+// Fetch pending join requests for registrar
+const fetchJoinRequests = async () => {
+  try {
+    setJoinRequestsLoading(true);
+    const res = await fetch('/api/registrar/join-requests', {
+      method: 'GET',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) throw new Error('Failed to fetch join requests');
+    const data = await res.json();
+    setJoinRequests(data || []);
+  } catch (err) {
+    console.error('Error fetching join requests:', err);
+    setJoinRequests([]);
+  } finally {
+    setJoinRequestsLoading(false);
+  }
+};
+
+useEffect(() => {
+  fetchJoinRequests();
+}, []);
+
+// Approve a join request
+const handleApproveJoinRequest = async (lawyerid, caseid) => {
+  try {
+    setJoinRequestsLoading(true);
+    const res = await fetch(`/api/registrar/join-requests/${lawyerid}/${caseid}/approve`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.message || 'Failed to approve');
+    }
+    showToast('Join request approved', 'success');
+    await fetchJoinRequests();
+  } catch (err) {
+    console.error(err);
+    showToast(err.message || 'Error approving join request', 'danger');
+  } finally {
+    setJoinRequestsLoading(false);
+  }
+};
+
+// Reject a join request
+const handleRejectJoinRequest = async (lawyerid, caseid) => {
+  if (!window.confirm('Reject this join request?')) return;
+  try {
+    setJoinRequestsLoading(true);
+    const res = await fetch(`/api/registrar/join-requests/${lawyerid}/${caseid}/reject`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.message || 'Failed to reject');
+    }
+    showToast('Join request rejected', 'success');
+    await fetchJoinRequests();
+  } catch (err) {
+    console.error(err);
+    showToast(err.message || 'Error rejecting join request', 'danger');
+  } finally {
+    setJoinRequestsLoading(false);
+  }
+};
 
   const [searchCase, setSearchCase] = useState('');
 
@@ -995,6 +1071,11 @@ useEffect(() => {
       .then(res => res.json())
       .then(data => setProsecutorOptions(data.prosecutors || []))
       .catch(() => setProsecutorOptions([]));
+    // fetch lawyers for opposing selection
+    fetch('/api/lawyers', { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => setLawyerOptions(data.lawyers || data || []))
+      .catch(() => setLawyerOptions([]));
   }
 }, [showVerifyModal]);
 
@@ -1023,12 +1104,13 @@ const handleVerifySubmit = async (e) => {
   setVerifyLoading(true);
   setVerifyError('');
   setVerifySuccess('');
-  try {
+    try {
+    const payload = { ...verifyForm, casenumber: caseNumber, respondent_lawyer_id: respondentLawyerId };
     const res = await fetch('/api/verifycases', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify(verifyForm)
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (!res.ok) {
@@ -2087,8 +2169,59 @@ useEffect(() => {
   </Card>
 )}
 
-          
-            {selectedPage === 'hearingSchedule' && (
+      {/* Pending Lawyer Join Requests */}
+      {selectedPage === 'cases' && (
+        <Card className="shadow-sm border-0 mt-3" style={{ borderRadius: 16 }}>
+          <Card.Body>
+            <div className="d-flex justify-content-between align-items-center mb-3">
+              <div>
+                <h2 className="fw-bold mb-1" style={{ color: '#22304a' }}><i className="bi bi-people me-2"></i>Pending Lawyer Join Requests</h2>
+                <div className="text-muted mb-2">Review and approve or reject lawyer requests to join cases.</div>
+              </div>
+            </div>
+            {joinRequestsLoading ? (
+              <div className="text-center py-4">
+                <Spinner animation="border" variant="primary" />
+                <div>Loading join requests...</div>
+              </div>
+            ) : joinRequests.length === 0 ? (
+              <div className="text-muted text-center py-4">No pending join requests.</div>
+            ) : (
+              <div className="table-responsive">
+                <table className="table align-middle mb-0">
+                  <thead style={{ background: '#f4f6fa' }}>
+                    <tr style={{ color: '#22304a', fontWeight: 600 }}>
+                      <th>Case Name</th>
+                      <th>Case Number</th>
+                      <th>Lawyer Name</th>
+                      <th>Side Requested</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {joinRequests.map((r, idx) => (
+                      <tr key={`${r.caseid}-${r.lawyerid}-${idx}`}>
+                        <td>{r.case_name}</td>
+                        <td>{r.casenumber}</td>
+                        <td>{r.lawyer_name}</td>
+                        <td>{r.side}</td>
+                        <td>
+                          <div className="d-flex gap-2">
+                            <Button variant="success" size="sm" onClick={() => handleApproveJoinRequest(r.lawyerid, r.caseid)}>Approve</Button>
+                            <Button variant="danger" size="sm" onClick={() => handleRejectJoinRequest(r.lawyerid, r.caseid)}>Reject</Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card.Body>
+        </Card>
+      )}
+
+                {selectedPage === 'hearingSchedule' && (
               <Card className="shadow-sm border-0" style={{ borderRadius: 16 }}>
                 <Card.Body style={{ padding: 0 }}>
                   <RegistrarHearingSchedule />
@@ -3052,11 +3185,11 @@ useEffect(() => {
             <Col xs={12} md={4}>
               <Card className="shadow-sm h-100">
                 <Card.Body className="text-center p-4">
-                  <div className="position-relative d-inline-block mb-3">
+                    <div className="position-relative d-inline-block mb-3">
                     <img
                       src={profileImage || `https://picsum.photos/seed/${profileData.name || 'registrar'}/150/150`}
                       alt="Registrar Avatar"
-                      className="rounded-circle border border-4 border-primary shadow-sm"
+                      className="rounded-circle border-4 border-primary shadow-sm"
                       width={150}
                       height={150}
                       style={{ objectFit: 'cover' }}
@@ -3093,7 +3226,7 @@ useEffect(() => {
                   <hr />
                   <div className="text-start">
                     <p className="mb-2 d-flex align-items-start">
-                      <MapPin size={18} className="me-2 text-primary flex-shrink-0 mt-1" />
+                      <MapPin size={18} className="me-2 text-primary shrink-0 mt-1" />
                       <span>{profileData.court || 'N/A'}</span>
                     </p>
                   </div>
@@ -3830,6 +3963,15 @@ useEffect(() => {
         />
       </Form.Group>
       <Form.Group className="mb-3">
+        <Form.Label>Case Number</Form.Label>
+        <Form.Control
+          type="text"
+          name="casenumber"
+          value={caseNumber}
+          onChange={e => setCaseNumber(e.target.value)}
+        />
+      </Form.Group>
+      <Form.Group className="mb-3">
         <Form.Label>Lawyer Name</Form.Label>
         <Form.Control
           type="text"
@@ -3863,6 +4005,19 @@ useEffect(() => {
           <option value="">Select prosecutor (optional)</option>
           {prosecutorOptions.map(p => (
             <option key={p.id} value={p.name}>{p.name}</option>
+          ))}
+        </Form.Select>
+      </Form.Group>
+      <Form.Group className="mb-3">
+        <Form.Label>Opposing Lawyer</Form.Label>
+        <Form.Select
+          name="respondentLawyer"
+          value={respondentLawyerId}
+          onChange={e => setRespondentLawyerId(e.target.value)}
+        >
+          <option value="">Select opposing lawyer (optional)</option>
+          {lawyerOptions.map(l => (
+            <option key={l.lawyerid || l.id} value={l.lawyerid || l.id}>{`${l.firstname || l.name || ''} ${l.lastname || ''}`.trim()}</option>
           ))}
         </Form.Select>
       </Form.Group>

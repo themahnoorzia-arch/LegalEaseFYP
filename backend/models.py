@@ -24,6 +24,10 @@ class Cases(Base):
     status: Mapped[Optional[str]] = mapped_column(String(50))
     createdat: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=text('CURRENT_TIMESTAMP'))
     updatedat: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=text('CURRENT_TIMESTAMP'))
+    
+    casenumber: Mapped[Optional[str]] = mapped_column(String(100))
+    is_potential_duplicate: Mapped[Optional[bool]] = mapped_column(Boolean, server_default=text('false'))
+    duplicate_of: Mapped[Optional[int]] = mapped_column(BigInteger)
 
     court: Mapped[List['Court']] = relationship('Court', secondary='courtaccess', back_populates='cases')
     prosecutor: Mapped[List['Prosecutor']] = relationship('Prosecutor', secondary='prosecutorassign', back_populates='cases')
@@ -492,6 +496,8 @@ t_caselawyeraccess = Table(
     'caselawyeraccess', Base.metadata,
     Column('caseid', BigInteger, primary_key=True, nullable=False),
     Column('lawyerid', BigInteger, primary_key=True, nullable=False),
+    Column('side', String(20)),
+    Column('is_lead', Boolean, default=True),
     ForeignKeyConstraint(['caseid'], ['cases.caseid'], ondelete='CASCADE', onupdate='CASCADE', name='caseaccessfk'),
     ForeignKeyConstraint(['lawyerid'], ['lawyer.lawyerid'], ondelete='CASCADE', onupdate='CASCADE', name='lawyeraccessfk'),
     PrimaryKeyConstraint('caseid', 'lawyerid', name='caselawyeraccesspk')
@@ -534,6 +540,8 @@ class Hearings(Base):
     remarks: Mapped[Optional[str]] = mapped_column(Text)
     createdat: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=text('CURRENT_TIMESTAMP'))
     updatedat: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, server_default=text('CURRENT_TIMESTAMP'))
+    
+    hearingstatus: Mapped[Optional[str]] = mapped_column(String(50), server_default=text("'scheduled'"))
 
     cases: Mapped['Cases'] = relationship('Cases', back_populates='hearings')
     judge: Mapped['Judge'] = relationship('Judge', back_populates='hearings')

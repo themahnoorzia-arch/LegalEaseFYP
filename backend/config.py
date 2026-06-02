@@ -7,6 +7,7 @@ load_dotenv()
 class Config:
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL')
     SESSION_TYPE = os.getenv('SESSION_TYPE', 'filesystem')
+    SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-change-in-production')
     
     @staticmethod
     def validate_config():

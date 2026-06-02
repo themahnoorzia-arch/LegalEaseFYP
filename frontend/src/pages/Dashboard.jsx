@@ -30,13 +30,21 @@ const Dashboard = () => {
   const [editingCase, setEditingCase] = useState(null);
   const [caseHistory, setCaseHistory] = useState([]);
   const [caseForm, setCaseForm] = useState({
-  title: '',
-  description: '',
-  caseType: '',
-  clientName: '',
-  courtName: ''
-});
-
+    title: '',
+    description: '',
+    caseType: '',
+    clientName: '',
+    courtName: '',
+    side: 'Petitioner',
+  });
+  const [courts, setCourts] = useState([]);
+  const [showJoinExistingModal, setShowJoinExistingModal] = useState(false);
+  const [duplicateMatch, setDuplicateMatch] = useState(null);
+  const [showJoinModal, setShowJoinModal] = useState(false);
+  const [joinSearch, setJoinSearch] = useState("");
+  const [joinResults, setJoinResults] = useState([]);
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [joinSide, setJoinSide] = useState("");
 
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('All');
@@ -96,6 +104,26 @@ const Dashboard = () => {
 
 
   useEffect(() => {
+    const fetchCourts = async () => {
+      try {
+        const res = await fetch('/api/courts', {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('userToken')}`,
+          },
+          credentials: 'include',
+        });
+        if (!res.ok) return;
+        const d = await res.json();
+        if (d && d.success && Array.isArray(d.courts)) setCourts(d.courts);
+      } catch (err) {
+        console.error('Failed to fetch courts', err);
+      }
+    };
+
+    fetchCourts();
+
     const fetchLawyerData = async () => {
       try {
         const response = await fetch('/api/dashboard', {
@@ -135,12 +163,7 @@ const Dashboard = () => {
           setError('Failed to load user data.');
         }
       } catch (err) {
-        setFallbackWarning('Backend unavailable, showing mock data.');
-        setLawyerData({ username: 'Mock Lawyer', specialization: 'Civil Law' });
-        setProfileImage('https://via.placeholder.com/40');
-        setPayments([
-          { paymenttype: 'Court Fee', purpose: 'Filing', balance: 1000, mode: 'Cash', paymentdate: '2024-06-01' }
-        ]);
+        setError('Could not load dashboard data from the server.');
       }
     };
 
@@ -158,10 +181,14 @@ const Dashboard = () => {
     if (!res.ok) throw new Error('Failed to fetch cases');
 
     const data = await res.json();
+    const caseList = Array.isArray(data.cases)
+      ? data.cases
+      : Array.isArray(data)
+        ? data
+        : null;
 
-    if (data && Array.isArray(data.cases)) {
-      // Normalize keys to match your frontend expectations
-      const normalizedCases = data.cases.map(c => ({
+    if (caseList) {
+      const normalizedCases = caseList.map(c => ({
         id: c.caseid,
         title: c.title,
         description: c.description,
@@ -176,36 +203,15 @@ const Dashboard = () => {
         verdict: c.verdict || '',
         history: c.history || [],
         remandStatus: c.remandstatus || '',
-        prosecutor:c.prosecutorName || 'N/A'
+        prosecutor: c.prosecutorName || c.prosecutor || 'N/A'
       }));
       setCases(normalizedCases);
     } else {
       throw new Error('Invalid response structure');
     }
   } catch (err) {
-    setFallbackWarning(prev => prev + '\nFailed to fetch live cases. Using mock data.');
-    setCases([
-      {
-        id: 1,
-        title: 'State v. Smith',
-        description: 'Criminal case involving theft',
-        caseType: 'Criminal',
-        filingDate: '2024-01-15',
-        status: 'Open',
-        prosecutor: 'Alex Mason',
-        lawyerName: 'John Doe',
-        clientName: 'Jane Smith',
-        courtName: 'Metropolis Central Courthouse',
-        judgeName: 'Judge Judy',
-        decisionDate: '',
-        decisionSummary: '',
-        verdict: '',
-        history: [
-          { date: '2024-01-15', event: 'Case filed' },
-          { date: '2024-02-01', event: 'First hearing' }
-        ]
-      }
-    ]);
+    setFallbackWarning('Could not load cases from the server.');
+    setCases([]);
   } finally {
     setLoading(false);
   }
@@ -247,55 +253,59 @@ const Dashboard = () => {
     }
   };
 const handleCaseSubmit = async (e) => {
-  e.preventDefault(); // Prevent the default form submission
-  const token = localStorage.getItem('userToken');
-  
-  // Prepare the data to send
-  const caseData = {
-    title: caseForm.title,
-    description: caseForm.description,
-    casetype: caseForm.caseType,
-    clientName: caseForm.clientName,
-    courtname : caseForm.courtName
-  };
+    e.preventDefault(); // Prevent the default form submission
+    const token = localStorage.getItem('userToken');
 
-  try {
-    let res;
+    const caseData = {
+      title: caseForm.title,
+      description: caseForm.description,
+      casetype: caseForm.caseType,
+      clientName: caseForm.clientName,
+      courtname: caseForm.courtName,
+      // casenumber removed from lawyer submission; registrar assigns case numbers
+      side: caseForm.side,
+    };
 
-    if (editingCase) {
-      // PUT request for editing an existing case
-      res = await fetch(`/api/cases/${editingCase.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(caseData),
-      });
-    } else {
-      // POST request for creating a new case
-      res = await fetch('/api/cases', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(caseData),
-      });
-    }
+    try {
+      let res;
 
-    if (!res.ok) throw new Error('Failed to submit the case');
+      // Note: Duplicate-check by case number removed from lawyer submission.
 
-    const data = await res.json();
+      if (editingCase) {
+        res = await fetch(`/api/cases/${editingCase.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify(caseData),
+        });
+      } else {
+        res = await fetch('/api/cases', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          credentials: 'include',
+          body: JSON.stringify(caseData),
+        });
+      }
 
-    if (editingCase) {
+      const responseData = await res.json();
+      if (!res.ok) {
+        throw new Error(responseData?.message || 'Failed to submit the case');
+      }
+      const data = responseData;
+
+      if (editingCase) {
       // Update the case in the state if editing
       setCases(prevCases =>
         prevCases.map(c => (c.id === editingCase.id ? { ...c, ...caseData } : c))
       );
     } else {
       // Add the new case to the state if it's a new case
-      const addedCase = {
+        const addedCase = {
         caseid: data.case_id, // case_id returned from the backend
         title: caseForm.title,
         description: caseForm.description,
@@ -312,13 +322,16 @@ const handleCaseSubmit = async (e) => {
     // Close the modal and reset the form
     setShowCaseModal(false);
     setEditingCase(null);
+    setShowJoinExistingModal(false);
+    setDuplicateMatch(null);
     setCaseForm({
-  title: '',
-  description: '',
-  caseType: '',
-  clientName: '',
-  courtName: '',
-});
+      title: '',
+      description: '',
+      caseType: '',
+      clientName: '',
+      courtName: '',
+      side: 'Petitioner',
+    });
 
   } catch (err) {
     console.error('Error submitting case:', err);
@@ -346,7 +359,15 @@ const handleCaseSubmit = async (e) => {
                   className="d-flex align-items-center gap-2"
                   onClick={() => setShowCaseModal(true)}
                 >
-                  <PlusCircle size={16} /> Add New Case
+                  <PlusCircle size={16} /> Request New Case Filing
+                </Button>
+                <Button 
+                  variant="primary" 
+                  size="sm" 
+                  className="d-flex align-items-center gap-2"
+                  onClick={() => setShowJoinModal(true)}
+                >
+                  <PlusCircle size={16} /> Join Existing Case
                 </Button>
               </div>
             </Card.Header>
@@ -605,15 +626,41 @@ const handleCaseSubmit = async (e) => {
                 required
               />
             </Form.Group>
+            {/* Case Number removed from lawyer filing form; registrar assigns numbers on verification */}
             <Form.Group className="mb-3">
-  <Form.Label>Court Name</Form.Label>
-  <Form.Control
-    type="text"
-    value={caseForm.courtName}
-    onChange={e => setCaseForm({ ...caseForm, courtName: e.target.value })}
-    required
-  />
-</Form.Group>
+              <Form.Label>Side</Form.Label>
+              <Form.Select
+                value={caseForm.side}
+                onChange={e => setCaseForm({ ...caseForm, side: e.target.value })}
+                required
+              >
+                <option value="Petitioner">Petitioner</option>
+                <option value="Respondent">Respondent</option>
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Court Name</Form.Label>
+              {courts && courts.length > 0 ? (
+                <Form.Select
+                  value={caseForm.courtName}
+                  onChange={e => setCaseForm({ ...caseForm, courtName: e.target.value })}
+                  required
+                >
+                  <option value="">Select court</option>
+                  {courts.map(c => (
+                    <option key={c.id} value={c.courtname}>{c.courtname}</option>
+                  ))}
+                </Form.Select>
+              ) : (
+                <Form.Control
+                  type="text"
+                  value={caseForm.courtName}
+                  onChange={e => setCaseForm({ ...caseForm, courtName: e.target.value })}
+                  placeholder="Enter court name"
+                  required
+                />
+              )}
+            </Form.Group>
 
           </Modal.Body>
           <Modal.Footer>
@@ -621,6 +668,189 @@ const handleCaseSubmit = async (e) => {
             <Button variant="primary" type="submit">{editingCase ? 'Update' : 'Add'} Case</Button>
           </Modal.Footer>
         </Form>
+      </Modal>
+
+      <Modal show={showJoinExistingModal} onHide={() => setShowJoinExistingModal(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Join Existing Case</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {duplicateMatch ? (
+            <>
+              <p>
+                This case already exists: <strong>{duplicateMatch.title}</strong>.
+                Do you want to join as opposing counsel?
+              </p>
+              <Form.Group className="mb-3">
+                <Form.Label>Select your side</Form.Label>
+                <Form.Select
+                  value={caseForm.side}
+                  onChange={e => setCaseForm({ ...caseForm, side: e.target.value })}
+                >
+                  <option value="Petitioner">Petitioner</option>
+                  <option value="Respondent">Respondent</option>
+                </Form.Select>
+              </Form.Group>
+            </>
+          ) : (
+            <p>Possible duplicate case found.</p>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => {
+            setShowJoinExistingModal(false);
+            setDuplicateMatch(null);
+          }}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={async () => {
+            setShowJoinExistingModal(false);
+            try {
+              const token = localStorage.getItem('userToken');
+              const res = await fetch('/api/cases', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`,
+                },
+                credentials: 'include',
+                body: JSON.stringify({
+                  title: caseForm.title,
+                  description: caseForm.description,
+                  casetype: caseForm.caseType,
+                  clientName: caseForm.clientName,
+                  courtname: caseForm.courtName,
+                  side: caseForm.side,
+                }),
+              });
+
+              const data = await res.json();
+              if (!res.ok) throw new Error(data?.message || 'Failed to join existing case');
+              setCases(prev => [
+                {
+                  caseid: data.case_id || data.caseid,
+                  title: caseForm.title,
+                  description: caseForm.description,
+                  casetype: caseForm.caseType,
+                  clientName: caseForm.clientName,
+                  status: 'Open',
+                  filingdate: new Date().toISOString().split('T')[0],
+                },
+                ...prev,
+              ]);
+              setShowCaseModal(false);
+              setEditingCase(null);
+              setDuplicateMatch(null);
+              setCaseForm({
+                title: '',
+                description: '',
+                caseType: '',
+                clientName: '',
+                courtName: '',
+                side: 'Petitioner',
+              });
+            } catch (err) {
+              console.error('Error joining existing case:', err);
+            }
+          }}>
+            Join Existing Case
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={showJoinModal} onHide={() => setShowJoinModal(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Join Existing Case</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3 d-flex gap-2">
+            <Form.Control
+              type="text"
+              placeholder="Search by case number or title"
+              value={joinSearch}
+              onChange={e => setJoinSearch(e.target.value)}
+            />
+            <Button variant="primary" onClick={async () => {
+              try {
+                const token = localStorage.getItem('userToken');
+                const res = await fetch(`/api/cases/check-duplicate?query=${encodeURIComponent(joinSearch)}`, {
+                  method: 'GET',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                  },
+                  credentials: 'include',
+                });
+                const data = await res.json();
+                const results = data.matches || data || [];
+                setJoinResults(Array.isArray(results) ? results : []);
+              } catch (err) {
+                console.error('Error searching cases:', err);
+              }
+            }}>Search</Button>
+          </Form.Group>
+
+          <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+            {joinResults.length === 0 ? (
+              <div className="text-muted">No results.</div>
+            ) : (
+              joinResults.map(r => (
+                <div key={r.caseid} className="d-flex align-items-center justify-content-between mb-2 p-2 border rounded">
+                  <div>
+                    <div><strong>{r.title || r.casename || 'Untitled'}</strong></div>
+                    <div className="text-muted">{r.casenumber || r.caseno || ''}</div>
+                  </div>
+                  <div className="d-flex align-items-center gap-2">
+                    <Button size="sm" variant="outline-primary" onClick={() => { setSelectedCase(r); setJoinSide(''); }}>Select</Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {selectedCase && (
+            <div className="mt-3">
+              <div className="mb-2"><strong>Selected:</strong> {selectedCase.title} — {selectedCase.casenumber}</div>
+              <Form.Group className="mb-3">
+                <Form.Label>Select side</Form.Label>
+                <Form.Select value={joinSide} onChange={e => setJoinSide(e.target.value)}>
+                  <option value="">Select side</option>
+                  <option value="Petitioner">Petitioner</option>
+                  <option value="Respondent">Respondent</option>
+                </Form.Select>
+              </Form.Group>
+            </div>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowJoinModal(false)}>Cancel</Button>
+          <Button variant="primary" onClick={async () => {
+            if (!selectedCase || !joinSide) return alert('Select a case and side first');
+            try {
+              const token = localStorage.getItem('userToken');
+              const res = await fetch('/api/cases/join-request', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`,
+                },
+                credentials: 'include',
+                body: JSON.stringify({ caseid: selectedCase.caseid, side: joinSide }),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data?.message || 'Failed to join case');
+              setShowJoinModal(false);
+              setJoinSearch('');
+              setJoinResults([]);
+              setSelectedCase(null);
+              setJoinSide('');
+              alert('Joined case successfully');
+            } catch (err) {
+              console.error('Error joining case:', err);
+              alert('Failed to join case');
+            }
+          }}>Confirm Join</Button>
+        </Modal.Footer>
       </Modal>
 
       <Modal show={showDecisionModal} onHide={() => setShowDecisionModal(false)} centered>

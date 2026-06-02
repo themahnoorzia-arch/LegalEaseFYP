@@ -121,14 +121,17 @@ const Signup = () => {
         headers: {
           'Content-Type': 'application/json',
         },
+        credentials: 'include',
         body: JSON.stringify(form),
       });
       const data = await response.json();
 
-      if (response.ok) {
-        // Store user role in localStorage
+      if (response.ok && data.success) {
         localStorage.setItem('userRole', form.role);
         localStorage.setItem('email', form.email);
+        if (data.user_id) {
+          localStorage.setItem('user_id', String(data.user_id));
+        }
 
         if (form.role === 'CourtRegistrar') {
           localStorage.setItem('CourtRegistrarProfile', JSON.stringify({
@@ -138,53 +141,14 @@ const Signup = () => {
             cnic: form.cnic,
             dob: form.dob
           }));
-          navigate('/CompleteProfile', { state: { role: form.role } });
-        } else if (form.role === 'Admin') {
-          navigate('/CompleteProfile', { state: { role: form.role } });
-        } else {
-          navigate('/CompleteProfile', { state: { role: form.role } });
         }
+        navigate('/CompleteProfile', { state: { role: form.role } });
       } else {
         setError(data.message || 'Signup failed. Please try again later.');
-        // Fallback to the dashboard page even if signup fails (mock behavior)
-        localStorage.setItem('userRole', form.role);
-        localStorage.setItem('email', form.email);
-
-        if (form.role === 'CourtRegistrar') {
-          localStorage.setItem('CourtRegistrarProfile', JSON.stringify({
-            name: form.firstname + ' ' + form.lastname,
-            email: form.email,
-            phone: form.phoneno,
-            cnic: form.cnic,
-            dob: form.dob
-          }));
-          navigate('/CompleteProfile', { state: { role: form.role } });
-        } else if (form.role === 'Admin') {
-          navigate('/CompleteProfile', { state: { role: form.role } });
-        } else {
-          navigate('/CompleteProfile', { state: { role: form.role } });
-        }
       }
     } catch (apiError) {
-      // Handle API errors, fallback to the dashboard page
-      localStorage.setItem('userRole', form.role);
-      localStorage.setItem('email', form.email);
-
-      if (form.role === 'CourtRegistrar') {
-        localStorage.setItem('CourtRegistrarProfile', JSON.stringify({
-          name: form.firstname + ' ' + form.lastname,
-          email: form.email,
-          phone: form.phoneno,
-          cnic: form.cnic,
-          dob: form.dob
-        }));
-        navigate('/CompleteProfile', { state: { role: form.role } });
-      } else if (form.role === 'Admin') {
-        navigate('/CompleteProfile', { state: { role: form.role } });
-      } else {
-        setError('Backend not available, using mock signup.');
-        navigate('/CompleteProfile', { state: { role: form.role } });
-      }
+      setError('Could not reach the server. Make sure the backend is running on port 5000.');
+      console.error('Signup error:', apiError);
     } finally {
       setIsLoading(false);
     }

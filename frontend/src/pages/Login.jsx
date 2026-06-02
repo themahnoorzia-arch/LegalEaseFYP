@@ -94,7 +94,7 @@ const Login = () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password, userType }),
-      credentials: 'include', // include cookies
+      credentials: 'include',
     });
 
     const result = await response.json();
@@ -103,6 +103,9 @@ const Login = () => {
       const { role } = result;
       localStorage.setItem('userRole', role);
       localStorage.setItem('email', result.email);
+      if (result.user_id) {
+        localStorage.setItem('user_id', String(result.user_id));
+      }
 
       if (role === 'Lawyer') {
         navigate('/dashboard');
@@ -128,7 +131,7 @@ const Login = () => {
       localStorage.setItem('userRole', role);
       localStorage.setItem('email', email);
       
-      if (role === 'Lawyer') navigate('/Dashboard');
+      if (role === 'Lawyer') navigate('/dashboard');
       else if (role === 'CourtRegistrar') navigate('/RegistrarDashboard');
       else if (role === 'Admin') navigate('/AdminDashboard');
       else if (role === 'Judge') navigate('/JudgeDashboard');
@@ -148,7 +151,7 @@ const Login = () => {
       localStorage.setItem('userRole', role);
       localStorage.setItem('email', email);
       
-      if (role === 'Lawyer') navigate('/Dashboard');
+      if (role === 'Lawyer') navigate('/dashboard');
       else if (role === 'CourtRegistrar') navigate('/RegistrarDashboard');
       else if (role === 'Admin') navigate('/AdminDashboard');
       else if (role === 'Judge') navigate('/JudgeDashboard');
@@ -220,32 +223,7 @@ const Login = () => {
           fontSize: '1.5rem',
         }}>Welcome Back</h2>
         <p className="text-muted mb-2" style={{ fontSize: '0.95rem' }}>Log in to your LegalEase account.</p>
-        {/* Collapsible Demo Credentials & User Type */}
-        <details style={{ marginBottom: '0.5rem' }}>
-          <summary style={{ cursor: 'pointer', fontSize: '0.95rem', color: '#1ec6b6', fontWeight: 600, outline: 'none' }}>Demo Options</summary>
-          <div style={{ fontSize: '0.92rem', marginTop: '0.3rem', marginBottom: '0.3rem', background: 'rgba(30,198,182,0.05)', borderRadius: '0.5rem', padding: '0.5rem' }}>
-            <div className="small mb-1"><b>Lawyer</b>: lawyer@example.com / password123</div>
-            <div className="small mb-1"><b>Court Registrar</b>: registrar@example.com / registrar123</div>
-            <div className="small mb-1"><b>Judge</b>: judge@example.com / judge123</div>
-            <div className="small"><b>Client</b>: client@example.com / client123</div>
-          </div>
-          <div className="d-flex flex-wrap gap-2 mb-2" style={{ fontSize: '0.92rem' }}>
-            {['lawyer', 'CourtRegistrar', 'Admin', 'Judge', 'Client'].map((type) => (
-              <label key={type} style={{ display: 'flex', alignItems: 'center', marginRight: 8, fontWeight: 500 }}>
-                <input
-                  type="radio"
-                  name="userType"
-                  value={type}
-                  checked={userType === type}
-                  onChange={() => setUserType(type)}
-                  style={{ accentColor: '#1ec6b6', marginRight: 3 }}
-                />
-                {type}
-              </label>
-            ))}
-          </div>
-        </details>
-          {error && (
+        {error && (
           <Alert variant="danger" onClose={() => setError(null)} dismissible style={{ borderRadius: '0.75rem', fontSize: '0.95rem', marginBottom: '0.5rem' }}>
               {error}
             </Alert>

@@ -5,7 +5,7 @@ import { LogOut } from 'lucide-react';
 const AdminDashboard = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [profileImage, setProfileImage] = useState('https://via.placeholder.com/40');
-  const [adminData, setAdminData] = useState({ username: 'Muhammad Kaif' });
+  const [adminData, setAdminData] = useState({ username: 'Admin' });
 
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -15,13 +15,13 @@ const AdminDashboard = () => {
   useEffect(() => {
     const fetchLogs = async () => {
       try {
-        const res = await fetch('/api/logs');
+        const res = await fetch('/api/logs', { credentials: 'include' });
         const result = await res.json();
 
         if (res.ok) {
-          setLogs(result);
+          setLogs(Array.isArray(result) ? result : []);
         } else {
-          setError('Failed to load logs');
+          setError(result.error || result.message || 'Failed to load logs');
         }
       } catch (err) {
         setError('An error occurred while fetching logs');
@@ -37,14 +37,12 @@ const AdminDashboard = () => {
   useEffect(() => {
     const fetchAdminProfile = async () => {
       try {
-        const res = await fetch('/api/adminprofile');
+        const res = await fetch('/api/adminprofile', { credentials: 'include' });
         const result = await res.json();
 
         if (res.ok && result.success) {
           const { firstName, lastName } = result.data;
-          setAdminData({ username: `${firstName} ${lastName}` });
-        } else {
-          console.error('Failed to load admin profile');
+          setAdminData({ username: `${firstName} ${lastName}`.trim() });
         }
       } catch (err) {
         console.error('Error fetching admin profile:', err);
