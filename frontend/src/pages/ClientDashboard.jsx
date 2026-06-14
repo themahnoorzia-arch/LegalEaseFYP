@@ -4,15 +4,25 @@ import { Card, Button, Image } from 'react-bootstrap';
 import { User } from 'lucide-react';
 import ClientCases from '../components/ClientCases';
 import ClientHearingSchedule from '../components/ClientHearingSchedule';
-import ClientDocuments from '../components/ClientDocuments';
+import CaseDocuments from '../components/CaseDocuments';
 import Profile from '../components/ClientProfile';
+import Notifications from '../components/dashboard/Notifications';
 import 'bootstrap/dist/css/bootstrap.min.css';
-
-const PROFILE_IMAGE_KEY = 'clientProfileImage';
 
 function ClientDashboard() {
   const [activeSection, setActiveSection] = useState('cases');
-  const [profileImage, setProfileImage] = useState(localStorage.getItem(PROFILE_IMAGE_KEY) || 'https://via.placeholder.com/40');
+  const [profileImage, setProfileImage] = useState(`/api/profile/photo/me?t=${Date.now()}`);
+  const photoInputRef = React.useRef(null);
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('photo', file);
+    try {
+      const res = await fetch('/api/profile/photo', { method: 'POST', credentials: 'include', body: fd });
+      if (res.ok) setProfileImage(`/api/profile/photo/me?t=${Date.now()}`);
+    } catch { /* silent */ }
+  };
   const [clientProfile, setClientProfile] = useState(null);
   const navigate = useNavigate();
 
@@ -115,13 +125,16 @@ function ClientDashboard() {
             <h4 className="mb-0" style={{ color: '#fff', fontWeight: 700 }}>Client Dashboard</h4>
             <span style={{ color: 'rgba(255,255,255,0.7)' }}>|</span>
             <div className="d-flex align-items-center gap-2">
+              <input type="file" accept="image/*" ref={photoInputRef} onChange={handlePhotoUpload} className="d-none" />
               <Image
                 src={profileImage}
                 roundedCircle
                 width={40}
                 height={40}
                 className="border"
-                style={{ borderColor: '#fff' }}
+                style={{ borderColor: '#fff', cursor: 'pointer' }}
+                onClick={() => photoInputRef.current?.click()}
+                onError={e => { e.target.onerror = null; e.target.src = 'https://via.placeholder.com/40'; }}
               />
               <div>
                 <h6 className="mb-0" style={{ color: '#fff', fontWeight: 600 }}>
@@ -132,6 +145,7 @@ function ClientDashboard() {
             </div>
           </div>
           <div className="d-flex align-items-center gap-3">
+            <div style={{ color: '#fff' }}><Notifications /></div>
             <button
               className="btn btn-outline-primary d-flex align-items-center gap-2"
               onClick={handleProfileClick}
@@ -214,7 +228,7 @@ function ClientDashboard() {
           <div className="container-fluid py-4">
             {activeSection === 'cases' && <ClientCases cases={cases} loading={loadingCases} error={caseError} />}
             {activeSection === 'hearings' && <ClientHearingSchedule />}
-            {activeSection === 'documents' && <ClientDocuments />}
+            {activeSection === 'documents' && <CaseDocuments cases={cases} userRole="Client" />}
             {activeSection === 'profile' && <Profile profile={clientProfile} />}
           </div>
         </div>

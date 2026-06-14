@@ -196,6 +196,44 @@ def update_judge():
             conn.close()
 
 # ==========================================================
+# GET LAWYERS (for registrar case verification / assignments)
+# ==========================================================
+@legal_actors_bp.route('/lawyers', methods=['GET'])
+@login_required
+def get_lawyers():
+    conn = None
+    try:
+        conn = get_pg_connection()
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute(
+                """
+                SELECT l.lawyerid, u.firstname, u.lastname, l.specialization
+                FROM lawyer l
+                JOIN users u ON u.userid = l.userid
+                ORDER BY u.firstname, u.lastname
+                """
+            )
+            rows = cur.fetchall()
+        lawyers = [
+            {
+                'lawyerid': row['lawyerid'],
+                'id': row['lawyerid'],
+                'firstname': row['firstname'],
+                'lastname': row['lastname'],
+                'name': f"{row['firstname']} {row['lastname']}".strip(),
+                'specialization': row['specialization'],
+            }
+            for row in rows
+        ]
+        return jsonify({'lawyers': lawyers}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+# ==========================================================
 # GET PROSECUTORS
 # ==========================================================
 @legal_actors_bp.route('/prosecutors', methods=['GET'])

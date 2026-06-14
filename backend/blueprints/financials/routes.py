@@ -1,23 +1,13 @@
 import datetime
 from decimal import Decimal
 
-import psycopg2
 import psycopg2.extras
 
 from flask import jsonify, request
 from flask_login import login_required, current_user
 
 from blueprints.financials import financials_bp
-from db.db import SessionLocal, get_pg_connection
-
-from models import (
-    Payments,
-    Cases,
-    Lawyer,
-    Court,
-    Courtregistrar,
-    t_courtaccess,
-)
+from db.db import get_pg_connection
 
 
 # ==========================================================
@@ -26,299 +16,217 @@ from models import (
 @financials_bp.route("/api/payments", methods=["GET"])
 @login_required
 def get_payments():
-
-    db = SessionLocal()
-
+    conn = None
     try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # --------------------------------------------------
-        # LAWYER VIEW
-        # --------------------------------------------------
         if current_user.role == "Lawyer":
-
-            lawyer = (
-                db.query(Lawyer)
-                .filter_by(userid=current_user.userid)
-                .first()
+            cur.execute(
+                """
+                SELECT p.paymentid, p.paymentdate, p.purpose, p.balance,
+                       p.mode, p.paymenttype, p.status,
+                       c.title AS casename, ct.courtname,
+                       TRIM(lu.firstname || ' ' || lu.lastname) AS lawyer_name
+                FROM payments p
+                JOIN lawyer l ON l.lawyerid = p.lawyerid
+                JOIN users lu ON lu.userid = l.userid
+                JOIN cases c ON c.caseid = p.caseid
+                LEFT JOIN court ct ON ct.courtid = p.courtid
+                WHERE l.userid = %s
+                ORDER BY p.paymentdate DESC NULLS LAST
+                """,
+                (current_user.userid,),
             )
 
-            if not lawyer:
-                return jsonify({
-                    "status": "error",
-                    "message": "Lawyer profile not found"
-                }), 404
-
-            payments = (
-                db.query(Payments)
-                .filter_by(lawyerid=lawyer.lawyerid)
-                .join(Cases, Payments.caseid == Cases.caseid)
-                .join(
-                    t_courtaccess,
-                    Payments.caseid == t_courtaccess.c.caseid
-                )
-                .join(
-                    Court,
-                    t_courtaccess.c.courtid == Court.courtid
-                )
-                .with_entities(
-                    Payments.paymentdate,
-                    Cases.title.label("casename"),
-                    Payments.purpose,
-                    Payments.balance,
-                    Payments.mode,
-                    Payments.paymenttype,
-                    Payments.status,
-                    Court.courtname,
-                )
-                .all()
-            )
-
-        # --------------------------------------------------
-        # REGISTRAR VIEW
-        # --------------------------------------------------
         elif current_user.role == "CourtRegistrar":
-
-            registrar = (
-                db.query(Courtregistrar)
-                .filter_by(userid=current_user.userid)
-                .first()
-            )
-
-            if not registrar:
-                return jsonify({
-                    "status": "error",
-                    "message": "Court registrar profile not found"
-                }), 404
-
-            payments = (
-                db.query(Payments)
-                .join(
-                    Cases,
-                    Payments.caseid == Cases.caseid
-                )
-                .join(
-                    t_courtaccess,
-                    t_courtaccess.c.caseid == Cases.caseid
-                )
-                .filter(
-                    t_courtaccess.c.courtid == registrar.courtid
-                )
-                .join(
-                    Court,
-                    t_courtaccess.c.courtid == Court.courtid
-                )
-                .with_entities(
-                    Payments.paymentdate,
-                    Cases.title.label("casename"),
-                    Payments.purpose,
-                    Payments.balance,
-                    Payments.mode,
-                    Payments.paymenttype,
-                    Payments.status,
-                    Court.courtname,
-                )
-                .all()
+            cur.execute(
+                """
+                SELECT p.paymentid, p.paymentdate, p.purpose, p.balance,
+                       p.mode, p.paymenttype, p.status,
+                       c.title AS casename, ct.courtname,
+                       TRIM(lu.firstname || ' ' || lu.lastname) AS lawyer_name
+                FROM payments p
+                JOIN cases c ON c.caseid = p.caseid
+                JOIN court ct ON ct.courtid = p.courtid
+                JOIN courtregistrar cr ON cr.courtid = ct.courtid
+                LEFT JOIN lawyer l ON l.lawyerid = p.lawyerid
+                LEFT JOIN users lu ON lu.userid = l.userid
+                WHERE cr.userid = %s
+                ORDER BY p.paymentdate DESC NULLS LAST
+                """,
+                (current_user.userid,),
             )
 
         else:
+            return jsonify({"status": "error", "message": "Unauthorized role"}), 403
 
-            return jsonify({
-                "status": "error",
-                "message": "Unauthorized role"
-            }), 403
-
+        rows = cur.fetchall()
         result = []
+        for r in rows:
+            row = dict(r)
+            if row.get("paymentdate"):
+                row["paymentdate"] = row["paymentdate"].isoformat()
+            if row.get("balance") is not None:
+                row["balance"] = float(row["balance"])
+            result.append(row)
 
-        for p in payments:
-
-            result.append({
-                "paymentdate": str(p.paymentdate),
-                "casename": p.casename,
-                "purpose": p.purpose,
-                "balance": float(p.balance),
-                "mode": p.mode,
-                "paymenttype": p.paymenttype,
-                "status": p.status,
-                "courtname": p.courtname,
-            })
-
-        return jsonify({
-            "status": "success",
-            "payments": result
-        }), 200
+        return jsonify({"status": "success", "payments": result}), 200
 
     except Exception as e:
-
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
+        return jsonify({"status": "error", "message": str(e)}), 500
     finally:
-        db.close()
+        if conn:
+            conn.close()
 
 
 # ==========================================================
-# CREATE PAYMENT
+# CREATE PAYMENT REQUEST (Registrar only)
 # ==========================================================
 @financials_bp.route("/api/payments", methods=["POST"])
 @login_required
 def create_payment():
+    if current_user.role != "CourtRegistrar":
+        return jsonify({"message": "Only court registrars can create payment requests"}), 403
 
-    data = request.get_json()
-
-    casename = data.get("casename")
-    purpose = data.get("purpose")
+    data = request.get_json() or {}
+    case_id = data.get("caseid")
+    purpose = data.get("purpose", "").strip()
     balance = data.get("balance")
-    mode = data.get("mode")
-    paymenttype = data.get("paymenttype")
+    payment_type = data.get("paymenttype", "Court Fee").strip()
 
-    paymentdate = (
-        data.get("paymentdate")
-        or datetime.date.today()
-    )
-
-    if not all([
-        casename,
-        purpose,
-        balance,
-        mode,
-        paymenttype
-    ]):
-        return jsonify({
-            "message": "Missing required fields"
-        }), 400
+    if not case_id or not purpose or balance is None:
+        return jsonify({"message": "caseid, purpose, and balance are required"}), 400
 
     conn = None
-
     try:
-
         conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        cur = conn.cursor(
-            cursor_factory=psycopg2.extras.RealDictCursor
+        # Get registrar's court
+        cur.execute(
+            "SELECT courtid FROM courtregistrar WHERE userid = %s",
+            (current_user.userid,),
         )
+        reg = cur.fetchone()
+        if not reg:
+            return jsonify({"message": "Registrar profile not found"}), 404
+        court_id = reg["courtid"]
 
-        # --------------------------------------------
-        # LAWYER ID
-        # --------------------------------------------
+        # Get the lawyer on this case
         cur.execute(
             """
-            SELECT lawyerid
-            FROM lawyer
-            WHERE userid = %s
+            SELECT l.lawyerid FROM caselawyeraccess cla
+            JOIN lawyer l ON l.lawyerid = cla.lawyerid
+            WHERE cla.caseid = %s
+            LIMIT 1
             """,
-            (current_user.userid,)
+            (case_id,),
         )
-
         lawyer_row = cur.fetchone()
+        lawyer_id = lawyer_row["lawyerid"] if lawyer_row else None
 
-        if not lawyer_row:
-            return jsonify({
-                "message": "Lawyer not found"
-            }), 404
-
-        lawyerid = lawyer_row["lawyerid"]
-
-        # --------------------------------------------
-        # CASE ID
-        # --------------------------------------------
         cur.execute(
             """
-            SELECT caseid
-            FROM cases
-            WHERE title = %s
+            INSERT INTO payments (purpose, balance, paymenttype, caseid, courtid, lawyerid, status)
+            VALUES (%s, %s, %s, %s, %s, %s, 'Pending')
+            RETURNING paymentid
             """,
-            (casename,)
+            (purpose, Decimal(str(balance)), payment_type, case_id, court_id, lawyer_id),
         )
-
-        case_row = cur.fetchone()
-
-        if not case_row:
-            return jsonify({
-                "message": "Case not found"
-            }), 404
-
-        caseid = case_row["caseid"]
-
-        # --------------------------------------------
-        # COURT ID
-        # --------------------------------------------
-        cur.execute(
-            """
-            SELECT courtid
-            FROM courtaccess
-            WHERE caseid = %s
-            """,
-            (caseid,)
-        )
-
-        court_row = cur.fetchone()
-
-        if not court_row:
-            return jsonify({
-                "message": "Court access not found"
-            }), 404
-
-        courtid = court_row["courtid"]
-
-        # --------------------------------------------
-        # INSERT PAYMENT
-        # --------------------------------------------
-        cur.execute(
-            """
-            INSERT INTO payments
-            (
-                mode,
-                purpose,
-                balance,
-                paymentdate,
-                lawyerid,
-                caseid,
-                courtid,
-                paymenttype
-            )
-            VALUES
-            (
-                %s,%s,%s,%s,%s,%s,%s,%s
-            )
-            """,
-            (
-                mode,
-                purpose,
-                Decimal(balance),
-                paymentdate,
-                lawyerid,
-                caseid,
-                courtid,
-                paymenttype,
-            )
-        )
-
+        new_id = cur.fetchone()["paymentid"]
         conn.commit()
 
-        return jsonify({
-            "message": "Payment recorded successfully",
-            "payment": {
-                "paymentdate": str(paymentdate),
-                "casename": casename,
-                "purpose": purpose,
-                "balance": float(balance),
-                "mode": mode,
-                "paymenttype": paymenttype,
-            }
-        }), 201
+        # Notify the lawyer
+        try:
+            from utils.notifications import push_notification
+            if lawyer_id:
+                cur.execute("SELECT userid FROM lawyer WHERE lawyerid = %s", (lawyer_id,))
+                lr = cur.fetchone()
+                if lr:
+                    push_notification(lr["userid"], "New Payment Request",
+                        f"A payment request of PKR {balance} has been sent to you for a case. Please confirm payment.",
+                        "warning", new_id)
+        except Exception:
+            pass
+
+        return jsonify({"message": "Payment request created", "paymentid": new_id}), 201
 
     except Exception as e:
-
         if conn:
             conn.rollback()
-
-        return jsonify({
-            "message": str(e)
-        }), 500
-
+        return jsonify({"message": str(e)}), 500
     finally:
+        if conn:
+            conn.close()
 
+
+# ==========================================================
+# CONFIRM PAYMENT (Lawyer only)
+# ==========================================================
+@financials_bp.route("/api/payments/<int:payment_id>/confirm", methods=["PATCH"])
+@login_required
+def confirm_payment(payment_id):
+    if current_user.role != "Lawyer":
+        return jsonify({"message": "Only lawyers can confirm payments"}), 403
+
+    data = request.get_json() or {}
+    mode = data.get("mode", "").strip()
+    payment_date = data.get("paymentdate") or datetime.date.today().isoformat()
+
+    valid_modes = ["Cash", "Credit/Debit card", "Online Transfer"]
+    if mode not in valid_modes:
+        return jsonify({"message": f"Mode must be one of: {', '.join(valid_modes)}"}), 400
+
+    conn = None
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Verify the payment belongs to this lawyer
+        cur.execute(
+            """
+            SELECT p.paymentid FROM payments p
+            JOIN lawyer l ON l.lawyerid = p.lawyerid
+            WHERE p.paymentid = %s AND l.userid = %s AND p.status = 'Pending'
+            """,
+            (payment_id, current_user.userid),
+        )
+        if not cur.fetchone():
+            return jsonify({"message": "Payment not found or already confirmed"}), 404
+
+        cur.execute(
+            """
+            UPDATE payments
+            SET mode = %s, paymentdate = %s, status = 'Paid'
+            WHERE paymentid = %s
+            """,
+            (mode, payment_date, payment_id),
+        )
+        conn.commit()
+
+        # Notify the registrar who created this payment
+        try:
+            from utils.notifications import push_notification
+            cur.execute(
+                """SELECT cr.userid FROM courtregistrar cr
+                   JOIN payments p ON p.courtid = cr.courtid
+                   WHERE p.paymentid = %s""",
+                (payment_id,),
+            )
+            reg = cur.fetchone()
+            if reg:
+                push_notification(reg["userid"], "Payment Confirmed",
+                    f"A lawyer has confirmed payment #{payment_id}.", "success", payment_id)
+        except Exception:
+            pass
+
+        return jsonify({"message": "Payment confirmed"}), 200
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify({"message": str(e)}), 500
+    finally:
         if conn:
             conn.close()

@@ -3,13 +3,24 @@ import { useNavigate } from 'react-router-dom';
 import { Image, Card, Row, Col, InputGroup, Form, Button, Badge, Table, Modal, ListGroup, Alert, Spinner } from 'react-bootstrap';
 import { User, PlusCircle, Search, Calendar, FileText, LogOut } from 'lucide-react';
 import JudgeSidebarNav from '../components/dashboard/JudgeSidebarNav';
+import CaseDocuments from '../components/CaseDocuments';
+import Notifications from '../components/dashboard/Notifications';
 import '../styles/dashboard.css';
-
-const PROFILE_IMAGE_KEY = 'judgeProfileImage';
 
 function JudgeDashboard() {
   const [activeSection, setActiveSection] = useState('assigned');
-  const [profileImage, setProfileImage] = useState(null);
+  const [profileImage, setProfileImage] = useState(`/api/profile/photo/me?t=${Date.now()}`);
+  const photoInputRef = React.useRef(null);
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('photo', file);
+    try {
+      const res = await fetch('/api/profile/photo', { method: 'POST', credentials: 'include', body: fd });
+      if (res.ok) setProfileImage(`/api/profile/photo/me?t=${Date.now()}`);
+    } catch { /* silent */ }
+  };
   const [judgeData, setJudgeData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -25,6 +36,8 @@ function JudgeDashboard() {
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [historyCase, setHistoryCase] = useState(null);
+  const [caseHistory, setCaseHistory] = useState([]);
+  const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [showDecisionModal, setShowDecisionModal] = useState(false);
   const [selectedCase, setSelectedCase] = useState(null);
   const [showEvidenceModal, setShowEvidenceModal] = useState(false);
@@ -130,8 +143,7 @@ useEffect(() => {
             username: `${firstName || ''} ${lastName || ''}`.trim() || 'Judge',
             specialization: specialization || position || 'Judiciary',
           });
-          const storedImage = localStorage.getItem(PROFILE_IMAGE_KEY);
-          setProfileImage(storedImage || 'https://via.placeholder.com/40');
+          setProfileImage(`/api/profile/photo/me?t=${Date.now()}`);
         } else {
           setError('Failed to load user data.');
         }
@@ -232,9 +244,27 @@ useEffect(() => {
     navigate('/judge-profile');
   };
 
-  const handleViewHistory = (case_) => {
+  const getCaseHistory = async (caseId) => {
+    try {
+      const res = await fetch(`/api/cases/${caseId}/history`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) return [];
+      return data.history || [];
+    } catch { return []; }
+  };
+
+  const handleViewHistory = async (case_) => {
     setHistoryCase(case_);
+    setCaseHistory([]);
+    setLoadingTimeline(true);
     setShowHistoryModal(true);
+    const history = await getCaseHistory(case_.id);
+    setCaseHistory(history);
+    setLoadingTimeline(false);
   };
 
   const handleViewEvidence = (case_) => {
@@ -613,42 +643,8 @@ const updateHearingRemarks = async (hearingId, remarks) => {
     if (activeSection === 'documents') {
       return (
         <Card className="border-0 shadow-sm">
-          <Card.Header className="bg-white border-bottom">
-            <h4 className="mb-0 fw-bold" style={{ color: '#22304a' }}>Documents</h4>
-          </Card.Header>
           <Card.Body>
-            <InputGroup className="mb-3">
-              <InputGroup.Text><Search size={16} /></InputGroup.Text>
-              <Form.Control
-                placeholder="Search documents..."
-                value={docSearch}
-                onChange={(e) => setDocSearch(e.target.value)}
-              />
-              <Form.Select value={docFilter} onChange={(e) => setDocFilter(e.target.value)} style={{ maxWidth: 160 }}>
-                <option value="all">All Types</option>
-                <option value="pdf">PDF</option>
-                <option value="docx">DOCX</option>
-              </Form.Select>
-            </InputGroup>
-            {loadingDocuments ? (
-              <div className="text-center py-4"><Spinner animation="border" /></div>
-            ) : filteredDocuments.length > 0 ? (
-              <ListGroup variant="flush">
-                {filteredDocuments.map((doc, idx) => (
-                  <ListGroup.Item key={doc.id || idx} className="d-flex justify-content-between align-items-center py-3">
-                    <div className="d-flex align-items-center gap-2">
-                      <FileText size={20} className="text-secondary" />
-                      <span className="fw-medium">{doc.name}</span>
-                    </div>
-                    <Button variant="outline-primary" size="sm" onClick={() => doc.path && window.open(doc.path, '_blank')}>
-                      View
-                    </Button>
-                  </ListGroup.Item>
-                ))}
-              </ListGroup>
-            ) : (
-              <p className="text-center text-muted mb-0">No documents found.</p>
-            )}
+            <CaseDocuments cases={cases} userRole="Judge" />
           </Card.Body>
         </Card>
       );
@@ -682,13 +678,16 @@ const updateHearingRemarks = async (hearingId, remarks) => {
             <h4 className="mb-0" style={{ color: '#fff', fontWeight: 700 }}>Judge Dashboard</h4>
             <span style={{ color: 'rgba(255,255,255,0.7)' }}>|</span>
             <div className="d-flex align-items-center gap-2">
+              <input type="file" accept="image/*" ref={photoInputRef} onChange={handlePhotoUpload} className="d-none" />
               <Image
-                src={profileImage || 'https://via.placeholder.com/40'}
+                src={profileImage}
                 roundedCircle
                 width={40}
                 height={40}
                 className="border"
-                style={{ borderColor: '#fff' }}
+                style={{ borderColor: '#fff', cursor: 'pointer' }}
+                onClick={() => photoInputRef.current?.click()}
+                onError={e => { e.target.onerror = null; e.target.src = 'https://via.placeholder.com/40'; }}
               />
               <div>
                 <h6 className="mb-0" style={{ color: '#fff', fontWeight: 600 }}>{judgeData?.username}</h6>
@@ -697,6 +696,7 @@ const updateHearingRemarks = async (hearingId, remarks) => {
             </div>
           </div>
           <div className="d-flex align-items-center gap-3">
+            <div style={{ color: '#fff' }}><Notifications /></div>
             <button
               type="button"
               className="btn d-flex align-items-center gap-2"
@@ -762,38 +762,67 @@ const updateHearingRemarks = async (hearingId, remarks) => {
           </Modal.Footer>
         </Form>
       </Modal>
-<Modal 
-  show={showHistoryModal} 
-  onHide={() => setShowHistoryModal(false)}
-  centered
-  className="event-modal"
->
-  <Modal.Header closeButton className="border-0">
-    <Modal.Title>Case History: {historyCase?.title || 'Untitled Case'}</Modal.Title>
+<Modal show={showHistoryModal} onHide={() => setShowHistoryModal(false)} centered size="lg">
+  <Modal.Header closeButton>
+    <div>
+      <Modal.Title className="fw-bold">{historyCase?.title || 'Case History'}</Modal.Title>
+      {historyCase?.casenumber && <small className="text-muted">{historyCase.casenumber}</small>}
+    </div>
   </Modal.Header>
-  <Modal.Body>
-    <ListGroup variant="flush">
-      {historyCase?.history && historyCase.history.length > 0 ? (
-        historyCase.history.map((event, index) => (
-          <ListGroup.Item key={index} className="border-0 mb-3 p-3 rounded-3 shadow-sm">
-            <div className="d-flex align-items-center gap-2 mb-2">
-              <Badge bg={event.type === 'Hearing' ? 'primary' : 'info'}>
-                {event.type || 'Event'}
-              </Badge>
-              <span className="fw-bold">{event.date}</span>
+  <Modal.Body style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+    {historyCase && (
+      <div className="d-flex flex-wrap gap-3 mb-4 p-3 rounded" style={{ background: '#f8f9fa' }}>
+        <div><span className="text-muted small">Type</span><br /><strong>{historyCase.caseType || '—'}</strong></div>
+        <div><span className="text-muted small">Status</span><br />
+          <Badge bg={historyCase.status === 'Closed' ? 'success' : historyCase.status === 'Open' ? 'primary' : 'secondary'}>
+            {historyCase.status || '—'}
+          </Badge>
+        </div>
+        <div><span className="text-muted small">Filed</span><br /><strong>{historyCase.filingDate || '—'}</strong></div>
+      </div>
+    )}
+    {loadingTimeline ? (
+      <div className="text-center text-muted py-4">
+        <div style={{ fontSize: 32 }}>⏳</div>
+        <div>Loading timeline...</div>
+      </div>
+    ) : caseHistory.length === 0 ? (
+      <div className="text-center text-muted py-4">
+        <div style={{ fontSize: 32 }}>📋</div>
+        <div>No history recorded for this case yet.</div>
+      </div>
+    ) : (
+      <div style={{ position: 'relative', paddingLeft: 28 }}>
+        <div style={{ position: 'absolute', left: 10, top: 0, bottom: 0, width: 2, background: '#dee2e6' }} />
+        {caseHistory.map((entry, idx) => {
+          const isAuto = entry.eventType === 'auto';
+          const dotColor = isAuto ? '#6c757d' : '#0d6efd';
+          return (
+            <div key={entry.historyid || idx} className="mb-4" style={{ position: 'relative' }}>
+              <div style={{
+                position: 'absolute', left: -22, top: 4,
+                width: 14, height: 14, borderRadius: '50%',
+                background: dotColor, border: '2px solid #fff',
+                boxShadow: '0 0 0 2px ' + dotColor,
+              }} />
+              <div className="ps-2">
+                <div className="d-flex align-items-center gap-2 mb-1 flex-wrap">
+                  <span className="text-muted small">{entry.actionDate || '—'}</span>
+                  <Badge bg={isAuto ? 'secondary' : 'info'} style={{ fontSize: '0.65rem' }}>
+                    {isAuto ? 'System' : 'Note'}
+                  </Badge>
+                </div>
+                <div className="fw-semibold">{entry.actionTaken || entry.event || '—'}</div>
+                {entry.remarks && <div className="text-muted small mt-1">{entry.remarks}</div>}
+              </div>
             </div>
-            <p className="mb-0">{event.event}</p>
-          </ListGroup.Item>
-        ))
-      ) : (
-        <div className="text-muted text-center">No history available for this case.</div>
-      )}
-    </ListGroup>
+          );
+        })}
+      </div>
+    )}
   </Modal.Body>
-  <Modal.Footer className="border-0">
-    <Button variant="light" onClick={() => setShowHistoryModal(false)}>
-      Close
-    </Button>
+  <Modal.Footer>
+    <Button variant="secondary" onClick={() => setShowHistoryModal(false)}>Close</Button>
   </Modal.Footer>
 </Modal>
 

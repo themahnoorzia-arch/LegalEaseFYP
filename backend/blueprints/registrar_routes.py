@@ -122,6 +122,18 @@ def approve_join_request(lawyerid, caseid):
                 return jsonify({'error': 'Join request not found'}), 404
 
         conn.commit()
+
+        # Notify the lawyer their request was approved
+        try:
+            from utils.notifications import push_notification
+            cur.execute("SELECT userid FROM lawyer WHERE lawyerid = %s", (lawyerid,))
+            lr = cur.fetchone()
+            if lr:
+                push_notification(lr[0], "Join Request Approved",
+                    f"Your request to join case #{caseid} has been approved by the registrar.", "success", caseid)
+        except Exception:
+            pass
+
         return jsonify({'message': 'Join request approved'}), 200
 
     except Exception as e:

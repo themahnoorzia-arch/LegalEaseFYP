@@ -59,6 +59,8 @@ const Signup = () => {
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [step, setStep] = useState(0);
+  const [emailSent, setEmailSent] = useState(false);
+  const [registeredEmail, setRegisteredEmail] = useState('');
   const navigate = useNavigate();
   const [showPassword, setShowPassword] = useState(false);
 
@@ -132,7 +134,6 @@ const Signup = () => {
         if (data.user_id) {
           localStorage.setItem('user_id', String(data.user_id));
         }
-
         if (form.role === 'CourtRegistrar') {
           localStorage.setItem('CourtRegistrarProfile', JSON.stringify({
             name: form.firstname + ' ' + form.lastname,
@@ -142,7 +143,8 @@ const Signup = () => {
             dob: form.dob
           }));
         }
-        navigate('/CompleteProfile', { state: { role: form.role } });
+        // Go to OTP verification — profile only accessible after verifying
+        navigate('/verify-otp', { state: { email: data.email || form.email, role: form.role } });
       } else {
         setError(data.message || 'Signup failed. Please try again later.');
       }
@@ -153,6 +155,32 @@ const Signup = () => {
       setIsLoading(false);
     }
   };
+
+  if (emailSent) {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'linear-gradient(135deg, #22304a 0%, #1ec6b6 100%)',
+      }}>
+        <div style={{
+          background: '#fff', borderRadius: 16, padding: '48px 40px', maxWidth: 440,
+          width: '90%', textAlign: 'center', boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
+        }}>
+          <div style={{ fontSize: 56, marginBottom: 16 }}>📧</div>
+          <h2 style={{ color: '#22304a', fontWeight: 700, marginBottom: 12 }}>Check your email</h2>
+          <p style={{ color: '#6b7280', fontSize: 15, marginBottom: 8 }}>
+            We sent a verification link to:
+          </p>
+          <p style={{ color: '#22304a', fontWeight: 600, fontSize: 16, marginBottom: 20 }}>
+            {registeredEmail}
+          </p>
+          <p style={{ color: '#6b7280', fontSize: 14 }}>
+            Click the link in the email to activate your account. Redirecting you to complete your profile…
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{

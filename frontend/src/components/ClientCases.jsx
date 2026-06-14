@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, Table, Row, Col, ListGroup, Button, Modal } from 'react-bootstrap';
+import { Card, Table, Row, Col, ListGroup, Button, Modal, Badge } from 'react-bootstrap';
 
 function ClientCases({ cases = [], loading = false, error = null }) {
   const [selectedCase, setSelectedCase] = useState(null);
@@ -7,14 +7,34 @@ function ClientCases({ cases = [], loading = false, error = null }) {
   const [showDecisionModal, setShowDecisionModal] = useState(false);
   const [historyCase, setHistoryCase] = useState(null);
   const [decisionCase, setDecisionCase] = useState(null);
+  const [caseHistory, setCaseHistory] = useState([]);
+  const [loadingTimeline, setLoadingTimeline] = useState(false);
 
   const handleRowClick = (caseItem) => {
     setSelectedCase(caseItem);
   };
 
-  const handleViewHistory = (caseItem) => {
+  const getCaseHistory = async (caseId) => {
+    try {
+      const res = await fetch(`/api/cases/${caseId}/history`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) return [];
+      return data.history || [];
+    } catch { return []; }
+  };
+
+  const handleViewHistory = async (caseItem) => {
     setHistoryCase(caseItem);
+    setCaseHistory([]);
+    setLoadingTimeline(true);
     setShowHistoryModal(true);
+    const history = await getCaseHistory(caseItem.id);
+    setCaseHistory(history);
+    setLoadingTimeline(false);
   };
 
   const handleViewDecision = (caseItem) => {
@@ -72,15 +92,7 @@ function ClientCases({ cases = [], loading = false, error = null }) {
                             <td>{caseItem.filingDate || '—'}</td>
                             <td>{caseItem.caseType || '—'}</td>
                             <td>
-                              <span
-                                className={`badge bg-${
-                                  caseItem.status === 'Closed'
-                                    ? 'success'
-                                    : caseItem.status === 'Open'
-                                      ? 'primary'
-                                      : 'warning'
-                                }`}
-                              >
+                              <span className={`badge bg-${caseItem.status === 'Closed' ? 'success' : caseItem.status === 'Open' ? 'primary' : 'warning'}`}>
                                 {caseItem.status}
                               </span>
                             </td>
@@ -120,14 +132,7 @@ function ClientCases({ cases = [], loading = false, error = null }) {
                         <div><strong>Type:</strong> {ev.type}</div>
                         <div><strong>Description:</strong> {ev.description}</div>
                         {ev.evidencePath && (
-                          <Button
-                            variant="outline-primary"
-                            size="sm"
-                            className="mt-2"
-                            href={ev.evidencePath}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
+                          <Button variant="outline-primary" size="sm" className="mt-2" href={ev.evidencePath} target="_blank" rel="noopener noreferrer">
                             View file
                           </Button>
                         )}
@@ -156,6 +161,7 @@ function ClientCases({ cases = [], loading = false, error = null }) {
         )}
       </Row>
 
+      {/* Final Decision Modal */}
       <Modal show={showDecisionModal} onHide={() => setShowDecisionModal(false)} centered>
         <Modal.Header closeButton>
           <Modal.Title>Final Decision</Modal.Title>
@@ -181,34 +187,72 @@ function ClientCases({ cases = [], loading = false, error = null }) {
           )}
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowDecisionModal(false)}>
-            Close
-          </Button>
+          <Button variant="secondary" onClick={() => setShowDecisionModal(false)}>Close</Button>
         </Modal.Footer>
       </Modal>
 
-      <Modal show={showHistoryModal} onHide={() => setShowHistoryModal(false)} centered>
+      {/* Timeline Modal */}
+      <Modal show={showHistoryModal} onHide={() => setShowHistoryModal(false)} centered size="lg">
         <Modal.Header closeButton>
-          <Modal.Title>Case History — {historyCase?.title}</Modal.Title>
+          <div>
+            <Modal.Title className="fw-bold">{historyCase?.title || 'Case History'}</Modal.Title>
+          </div>
         </Modal.Header>
-        <Modal.Body>
-          {historyCase?.history?.length > 0 ? (
-            <div className="p-3">
-              {historyCase.history.map((h, idx) => (
-                <div key={idx} className="mb-3">
-                  <div className="text-muted small mb-1">{h.date}</div>
-                  <div className="p-2 bg-light rounded">{h.event}</div>
-                </div>
-              ))}
+        <Modal.Body style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+          {historyCase && (
+            <div className="d-flex flex-wrap gap-3 mb-4 p-3 rounded" style={{ background: '#f8f9fa' }}>
+              <div><span className="text-muted small">Type</span><br /><strong>{historyCase.caseType || '—'}</strong></div>
+              <div><span className="text-muted small">Status</span><br />
+                <Badge bg={historyCase.status === 'Closed' ? 'success' : historyCase.status === 'Open' ? 'primary' : 'secondary'}>
+                  {historyCase.status || '—'}
+                </Badge>
+              </div>
+              <div><span className="text-muted small">Filed</span><br /><strong>{historyCase.filingDate || '—'}</strong></div>
+              <div><span className="text-muted small">Lawyer</span><br /><strong>{historyCase.lawyers || '—'}</strong></div>
+            </div>
+          )}
+          {loadingTimeline ? (
+            <div className="text-center text-muted py-4">
+              <div style={{ fontSize: 32 }}>⏳</div>
+              <div>Loading timeline...</div>
+            </div>
+          ) : caseHistory.length === 0 ? (
+            <div className="text-center text-muted py-4">
+              <div style={{ fontSize: 32 }}>📋</div>
+              <div>No history recorded for this case yet.</div>
             </div>
           ) : (
-            <p className="text-muted mb-0">No history entries for this case yet.</p>
+            <div style={{ position: 'relative', paddingLeft: 28 }}>
+              <div style={{ position: 'absolute', left: 10, top: 0, bottom: 0, width: 2, background: '#dee2e6' }} />
+              {caseHistory.map((entry, idx) => {
+                const isAuto = entry.eventType === 'auto';
+                const dotColor = isAuto ? '#6c757d' : '#0d6efd';
+                return (
+                  <div key={entry.historyid || idx} className="mb-4" style={{ position: 'relative' }}>
+                    <div style={{
+                      position: 'absolute', left: -22, top: 4,
+                      width: 14, height: 14, borderRadius: '50%',
+                      background: dotColor, border: '2px solid #fff',
+                      boxShadow: '0 0 0 2px ' + dotColor,
+                    }} />
+                    <div className="ps-2">
+                      <div className="d-flex align-items-center gap-2 mb-1 flex-wrap">
+                        <span className="text-muted small">{entry.actionDate || '—'}</span>
+                        <Badge bg={isAuto ? 'secondary' : 'info'} style={{ fontSize: '0.65rem' }}>
+                          {isAuto ? 'System' : 'Note'}
+                        </Badge>
+                      </div>
+                      <div className="fw-semibold">{entry.actionTaken || entry.event || '—'}</div>
+                      {entry.remarks && <div className="text-muted small mt-1">{entry.remarks}</div>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowHistoryModal(false)}>
-            Close
-          </Button>
+          <Button variant="secondary" onClick={() => setShowHistoryModal(false)}>Close</Button>
         </Modal.Footer>
       </Modal>
     </div>

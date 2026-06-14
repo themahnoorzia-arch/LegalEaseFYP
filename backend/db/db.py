@@ -47,10 +47,10 @@ logger = logging.getLogger(__name__)
 engine: Engine = create_engine(
     Config.SQLALCHEMY_DATABASE_URI,
     pool_pre_ping=True,          # health-check connections before use
-    pool_size=10,                # base pool; tune via env if needed
-    max_overflow=20,             # extra connections under burst load
-    pool_timeout=30,             # seconds to wait for a free slot
-    pool_recycle=1800,           # recycle connections every 30 min
+    pool_size=3,                 # small pool — pgBouncer handles multiplexing
+    max_overflow=2,              # allow burst to 5 total SQLAlchemy connections
+    pool_timeout=10,             # fail fast if no slot is free
+    pool_recycle=300,            # recycle every 5 min to keep pgBouncer happy
     echo=False,                  # set True (or use logging) for SQL debug
 )
 

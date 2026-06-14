@@ -127,6 +127,71 @@ def _serialize_lawyer_case(db, case):
     }
 
 
+def _serialize_registrar_case(db, case):
+    """Return case data enriched with client, lawyer, judge, prosecutor names
+    for the CourtRegistrar dashboard view."""
+
+    # Client name from caseparticipantaccess → caseparticipant → users
+    client_name = "N/A"
+    access_row = db.execute(
+        t_caseparticipantaccess.select().where(
+            t_caseparticipantaccess.c.caseid == case.caseid
+        )
+    ).first()
+    if access_row:
+        participant = db.query(Caseparticipant).filter_by(
+            participantid=access_row.participantid
+        ).first()
+        if participant and participant.userid:
+            client_user = db.query(Users).filter_by(
+                userid=participant.userid
+            ).first()
+            if client_user:
+                client_name = (
+                    f"{client_user.firstname or ''} "
+                    f"{client_user.lastname or ''}"
+                ).strip() or "N/A"
+
+    # Lead / first lawyer linked to the case
+    lawyer_name = "N/A"
+    if case.lawyer:
+        lw = case.lawyer[0]
+        if lw.users:
+            lawyer_name = (
+                f"{lw.users.firstname or ''} "
+                f"{lw.users.lastname or ''}"
+            ).strip() or "N/A"
+
+    # Assigned judge
+    judge_name = "N/A"
+    if case.judge:
+        jg = case.judge[0]
+        if jg.users:
+            judge_name = (
+                f"{jg.users.firstname or ''} "
+                f"{jg.users.lastname or ''}"
+            ).strip() or "N/A"
+
+    # Assigned prosecutor
+    prosecutor_name = "N/A"
+    if case.prosecutor:
+        prosecutor_name = case.prosecutor[0].name or "N/A"
+
+    return {
+        "caseid": case.caseid,
+        "title": case.title,
+        "description": case.description,
+        "casetype": case.casetype,
+        "filingdate": case.filingdate.isoformat() if case.filingdate else None,
+        "status": case.status,
+        "casenumber": case.casenumber,
+        "clientname": client_name,
+        "lawyername": lawyer_name,
+        "judgeName": judge_name,
+        "prosecutor": prosecutor_name,
+    }
+
+
 @cases_bp.route('/cases', methods=['POST'])
 @login_required
 def create_case():
@@ -141,7 +206,7 @@ def create_case():
         description = data.get('description')
         casetype = data.get('casetype')
         casenumber = data.get('casenumber')
-        side = data.get('side', '').strip()
+        side = data.get('side', '').strip().lower()
         filingdate = (
             data.get('filingdate')
             or datetime.date.today()
@@ -185,6 +250,17 @@ def create_case():
         conn = get_pg_connection()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
+        # Get lawyer profile early
+        cur.execute(
+            "SELECT lawyerid FROM lawyer WHERE userid = %s",
+            (current_user.userid,)
+        )
+        lawyer_row = cur.fetchone()
+        if not lawyer_row:
+            return jsonify({'message': 'Lawyer profile not found'}), 404
+
+        lawyerid = lawyer_row.get('lawyerid') if isinstance(lawyer_row, dict) else lawyer_row[0]
+
         cur.execute(
             """
             SELECT courtid
@@ -203,48 +279,50 @@ def create_case():
 
         courtid = court_row['courtid']
 
-        # Attempt to detect likely duplicate by casenumber or matching participant name
-        casenumber_param = casenumber or ''
+        # Duplicate check — only by case number (if provided)
+        # The similarity()-based check was removed because it requires pg_trgm
+        # and was incorrectly matching unrelated cases.
+        duplicate_case = None
+        if casenumber:
+            cur.execute(
+                "SELECT caseid FROM cases WHERE casenumber = %s LIMIT 1",
+                (casenumber,)
+            )
+            duplicate_case = cur.fetchone()
+
+        # Check if caselawyeraccess has a status column
         cur.execute(
-            """
-            SELECT c.caseid
-            FROM cases c
-            LEFT JOIN caseparticipantaccess cpa ON cpa.caseid = c.caseid
-            LEFT JOIN caseparticipant cp ON cp.participantid = cpa.participantid
-            LEFT JOIN users u ON u.userid = cp.userid
-            WHERE (c.casenumber = %s AND %s <> '')
-               OR (similarity(CONCAT_WS(' ', u.firstname, u.lastname), %s) > 0.6)
-            GROUP BY c.caseid
-            LIMIT 1
-            """,
-            (casenumber_param, casenumber_param, fullname),
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='caselawyeraccess' AND column_name='status'"
         )
+        has_status = cur.fetchone() is not None
 
-        duplicate_case = cur.fetchone()
         if duplicate_case:
-            caseid = duplicate_case['caseid']
-            cur.execute(
-                "SELECT lawyerid FROM lawyer WHERE userid = %s",
-                (current_user.userid,)
-            )
-            lawyer_row = cur.fetchone()
-            if not lawyer_row:
-                return jsonify({'message': 'Lawyer profile not found'}), 404
-
-            lawyerid = lawyer_row['lawyerid']
-            cur.execute(
-                """
-                INSERT INTO caselawyeraccess (caseid, lawyerid, side, is_lead)
-                VALUES (%s, %s, %s, TRUE)
-                ON CONFLICT (caseid, lawyerid) DO UPDATE
-                SET side = EXCLUDED.side
-                """,
-                (caseid, lawyerid, side),
-            )
+            existing_caseid = duplicate_case['caseid'] if isinstance(duplicate_case, dict) else duplicate_case[0]
+            if has_status:
+                cur.execute(
+                    """
+                    INSERT INTO caselawyeraccess (caseid, lawyerid, side, is_lead, status)
+                    VALUES (%s, %s, %s, TRUE, 'approved')
+                    ON CONFLICT (caseid, lawyerid) DO UPDATE
+                    SET side = EXCLUDED.side, status = EXCLUDED.status
+                    """,
+                    (existing_caseid, lawyerid, side),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO caselawyeraccess (caseid, lawyerid, side, is_lead)
+                    VALUES (%s, %s, %s, TRUE)
+                    ON CONFLICT (caseid, lawyerid) DO UPDATE
+                    SET side = EXCLUDED.side
+                    """,
+                    (existing_caseid, lawyerid, side),
+                )
             conn.commit()
             return jsonify({
                 'message': 'Joined existing case',
-                'case_id': caseid
+                'case_id': existing_caseid
             }), 200
 
         cur.execute(
@@ -298,8 +376,8 @@ def create_case():
             """
             SELECT userid
             FROM users
-            WHERE firstname=%s
-            AND lastname=%s
+            WHERE LOWER(firstname)=LOWER(%s)
+            AND LOWER(lastname)=LOWER(%s)
             """,
             (
                 firstname,
@@ -310,32 +388,53 @@ def create_case():
         user_row = cur.fetchone()
 
         if not user_row:
-            return jsonify({
-                'message':
-                'User not found'
-            }), 404
-
-        # RealDictCursor returns a dict
-        userid = user_row.get('userid') if isinstance(user_row, dict) else user_row[0]
-
-        cur.execute(
-            """
-            SELECT participantid
-            FROM caseparticipant
-            WHERE userid=%s
-            """,
-            (userid,)
-        )
-
-        participant_row = cur.fetchone()
-
-        if not participant_row:
-            return jsonify({
-                'message':
-                'Participant not found'
-            }), 404
-
-        participantid = participant_row.get('participantid') if isinstance(participant_row, dict) else participant_row[0]
+            # Auto-create user as CaseParticipant
+            email = f"{firstname.lower()}.{lastname.lower()}@legalease-temp.com"
+            cur.execute(
+                """
+                INSERT INTO users (role, firstname, lastname, email)
+                VALUES ('CaseParticipant', %s, %s, %s)
+                RETURNING userid
+                """,
+                (firstname, lastname, email)
+            )
+            user_row = cur.fetchone()
+            userid = user_row.get('userid') if isinstance(user_row, dict) else user_row[0]
+            
+            cur.execute(
+                """
+                INSERT INTO caseparticipant (userid, address)
+                VALUES (%s, 'Address not specified')
+                RETURNING participantid
+                """,
+                (userid,)
+            )
+            part_row = cur.fetchone()
+            participantid = part_row.get('participantid') if isinstance(part_row, dict) else part_row[0]
+        else:
+            userid = user_row.get('userid') if isinstance(user_row, dict) else user_row[0]
+            cur.execute(
+                """
+                SELECT participantid
+                FROM caseparticipant
+                WHERE userid=%s
+                """,
+                (userid,)
+            )
+            participant_row = cur.fetchone()
+            if not participant_row:
+                cur.execute(
+                    """
+                    INSERT INTO caseparticipant (userid, address)
+                    VALUES (%s, 'Address not specified')
+                    RETURNING participantid
+                    """,
+                    (userid,)
+                )
+                part_row = cur.fetchone()
+                participantid = part_row.get('participantid') if isinstance(part_row, dict) else part_row[0]
+            else:
+                participantid = participant_row.get('participantid') if isinstance(participant_row, dict) else participant_row[0]
 
         cur.execute(
             """
@@ -352,13 +451,36 @@ def create_case():
             )
         )
 
+        # Link lawyer who requested/created the case
+        if has_status:
+            cur.execute(
+                """
+                INSERT INTO caselawyeraccess (caseid, lawyerid, side, is_lead, status)
+                VALUES (%s, %s, %s, TRUE, 'approved')
+                ON CONFLICT (caseid, lawyerid) DO UPDATE
+                SET side = EXCLUDED.side, status = EXCLUDED.status
+                """,
+                (caseid, lawyerid, side),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO caselawyeraccess (caseid, lawyerid, side, is_lead)
+                VALUES (%s, %s, %s, TRUE)
+                ON CONFLICT (caseid, lawyerid) DO UPDATE
+                SET side = EXCLUDED.side
+                """,
+                (caseid, lawyerid, side),
+            )
+
         conn.commit()
 
+        from utils.logging import write_log
+        write_log("CREATE", f"New case registered: {title}", "case")
+
         return jsonify({
-            'message':
-            'Case created successfully',
-            'case_id':
-            caseid
+            'message': 'Case created successfully',
+            'case_id': caseid
         }), 201
 
     except Exception as e:
@@ -382,7 +504,7 @@ def join_case_request():
     """Join an existing case as a lawyer. Expects JSON: { caseid, side }"""
     data = request.get_json() or {}
     caseid = data.get('caseid')
-    side = (data.get('side') or '').strip()
+    side = (data.get('side') or '').strip().lower()
 
     if not caseid or not side:
         return jsonify({'message': 'Missing caseid or side'}), 400
@@ -407,14 +529,31 @@ def join_case_request():
         lawyerid = lawyer_row['lawyerid']
 
         cur.execute(
-            """
-            INSERT INTO caselawyeraccess (caseid, lawyerid, side, is_lead, status)
-            VALUES (%s, %s, %s, TRUE, 'pending')
-            ON CONFLICT (caseid, lawyerid) DO UPDATE
-            SET side = EXCLUDED.side, status = EXCLUDED.status
-            """,
-            (caseid, lawyerid, side),
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='caselawyeraccess' AND column_name='status'"
         )
+        has_status = cur.fetchone() is not None
+
+        if has_status:
+            cur.execute(
+                """
+                INSERT INTO caselawyeraccess (caseid, lawyerid, side, is_lead, status)
+                VALUES (%s, %s, %s, TRUE, 'pending')
+                ON CONFLICT (caseid, lawyerid) DO UPDATE
+                SET side = EXCLUDED.side, status = EXCLUDED.status
+                """,
+                (caseid, lawyerid, side),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO caselawyeraccess (caseid, lawyerid, side, is_lead)
+                VALUES (%s, %s, %s, TRUE)
+                ON CONFLICT (caseid, lawyerid) DO UPDATE
+                SET side = EXCLUDED.side
+                """,
+                (caseid, lawyerid, side),
+            )
         conn.commit()
 
         return jsonify({'message': 'Joined case successfully', 'case_id': caseid}), 200
@@ -888,6 +1027,9 @@ def get_cases():
                 .all()
             )
 
+            result = [_serialize_registrar_case(db, case) for case in cases]
+            return jsonify({"cases": result}), 200
+
         else:
 
             cases = db.query(Cases).all()
@@ -1035,40 +1177,381 @@ def assign_case(case_id):
 
         db.close()
 
-@cases_bp.route(
-    '/cases/<int:case_id>/history',
-    methods=['GET']
-)
+@cases_bp.route('/verifycases', methods=['POST'])
 @login_required
-def get_case_history(case_id):
+def verify_case():
+    """CourtRegistrar verifies a case: assigns case number, judge, prosecutor,
+    optional respondent lawyer, and sets status to 'Open'."""
 
-    db = SessionLocal()
+    if current_user.role != 'CourtRegistrar':
+        return jsonify({'error': 'Only court registrars can verify cases'}), 403
 
+    data = request.get_json() or {}
+    caseid = data.get('caseid')
+    judgename = (data.get('judgename') or '').strip()
+    prosecutorname = (data.get('prosecutorname') or '').strip()
+    respondent_lawyer_id = data.get('respondent_lawyer_id')
+
+    if not caseid:
+        return jsonify({'error': 'caseid is required'}), 400
+    if not judgename:
+        return jsonify({'error': 'Please select a judge'}), 400
+
+    conn = None
     try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        history = (
-            db.query(Casehistory)
-            .filter_by(caseid=case_id)
-            .order_by(Casehistory.actiondate.desc())
-            .all()
+        # Verify case exists
+        cur.execute(
+            "SELECT caseid, casenumber FROM cases WHERE caseid = %s",
+            (caseid,)
+        )
+        case_row = cur.fetchone()
+        if not case_row:
+            return jsonify({'error': 'Case not found'}), 404
+
+        # Generate case number if not already assigned
+        casenumber = case_row['casenumber']
+        if not casenumber:
+            year = datetime.date.today().year
+            casenumber = f"CASE-{year}-{int(caseid):04d}"
+
+        # Update case: assign case number and set status to Open
+        cur.execute(
+            "UPDATE cases SET casenumber = %s, status = 'Open', "
+            "updatedat = NOW() WHERE caseid = %s",
+            (casenumber, caseid)
         )
 
-        result = []
+        # Resolve and assign judge by full name
+        name_parts = judgename.split()
+        jfirst = name_parts[0]
+        jlast = ' '.join(name_parts[1:]) if len(name_parts) > 1 else ''
+        cur.execute(
+            """
+            SELECT j.judgeid FROM judge j
+            JOIN users u ON u.userid = j.userid
+            WHERE LOWER(u.firstname) = LOWER(%s)
+              AND LOWER(u.lastname) = LOWER(%s)
+            LIMIT 1
+            """,
+            (jfirst, jlast)
+        )
+        judge_row = cur.fetchone()
+        if judge_row:
+            cur.execute(
+                "INSERT INTO judgeaccess (judgeid, caseid) "
+                "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (judge_row['judgeid'], caseid)
+            )
 
-        for item in history:
-            result.append({
-                "historyid": item.historyid,
-                "date": (
-                    item.actiondate.isoformat() if item.actiondate else None
-                ),
-                "event": item.actiontaken,
-                "actiontaken": item.actiontaken,
-                "remarks": item.remarks,
-            })
+        # Resolve and assign prosecutor by name (optional)
+        if prosecutorname:
+            cur.execute(
+                "SELECT prosecutorid FROM prosecutor "
+                "WHERE LOWER(name) = LOWER(%s) LIMIT 1",
+                (prosecutorname,)
+            )
+            prosecutor_row = cur.fetchone()
+            if prosecutor_row:
+                cur.execute(
+                    "INSERT INTO prosecutorassign (prosecutorid, caseid) "
+                    "VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (prosecutor_row['prosecutorid'], caseid)
+                )
 
-        return jsonify({"history": result}), 200
+        # Assign respondent / opposing lawyer (optional)
+        if respondent_lawyer_id:
+            try:
+                rl_id = int(respondent_lawyer_id)
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='caselawyeraccess' AND column_name='status'"
+                )
+                has_status = cur.fetchone() is not None
+
+                if has_status:
+                    cur.execute(
+                        """
+                        INSERT INTO caselawyeraccess
+                            (caseid, lawyerid, side, is_lead, status)
+                        VALUES (%s, %s, 'respondent', FALSE, 'approved')
+                        ON CONFLICT (caseid, lawyerid) DO UPDATE
+                        SET side = EXCLUDED.side, status = EXCLUDED.status
+                        """,
+                        (caseid, rl_id)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO caselawyeraccess
+                            (caseid, lawyerid, side, is_lead)
+                        VALUES (%s, %s, 'respondent', FALSE)
+                        ON CONFLICT (caseid, lawyerid) DO UPDATE
+                        SET side = EXCLUDED.side
+                        """,
+                        (caseid, rl_id)
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        conn.commit()
+
+        from utils.logging import write_log
+        write_log("UPDATE", f"Case verified and opened — case number: {casenumber}", "case")
+
+        # In-app notifications
+        try:
+            from utils.notifications import push_notification
+            # Notify the assigned judge
+            if judge_row:
+                cur.execute("SELECT userid FROM judge WHERE judgeid = %s", (judge_row['judgeid'],))
+                jr = cur.fetchone()
+                if jr:
+                    push_notification(jr['userid'], "New Case Assigned",
+                        f"You have been assigned as judge on case {casenumber}.", "info", caseid)
+            # Notify all lawyers already on the case
+            cur.execute(
+                "SELECT l.userid FROM lawyer l JOIN caselawyeraccess cla ON cla.lawyerid = l.lawyerid WHERE cla.caseid = %s",
+                (caseid,)
+            )
+            for lrow in cur.fetchall():
+                push_notification(lrow['userid'], "Case Verified",
+                    f"Your case {casenumber} has been verified and is now Open.", "success", caseid)
+        except Exception:
+            pass
+
+        return jsonify({
+            'message': 'Case verified successfully',
+            'casenumber': casenumber,
+            'caseid': caseid,
+        }), 200
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify({'error': str(e)}), 500
 
     finally:
+        if conn:
+            conn.close()
 
-        db.close()
+
+@cases_bp.route('/cases/<int:case_id>/history', methods=['GET'])
+@login_required
+def get_case_history(case_id):
+    """
+    Return a full chronological timeline for one case.
+    Merges auto-generated events (derived from existing DB records) with
+    manual casehistory entries so the view always shows something meaningful.
+    """
+    conn = None
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # ── base case info + person names ──────────────────────────────────
+        cur.execute(
+            """
+            SELECT
+                c.caseid, c.title, c.casenumber, c.status,
+                c.filingdate, c.casetype,
+                (
+                    SELECT TRIM(u.firstname || ' ' || u.lastname)
+                    FROM judgeaccess ja
+                    JOIN judge j  ON j.judgeid  = ja.judgeid
+                    JOIN users u  ON u.userid   = j.userid
+                    WHERE ja.caseid = c.caseid LIMIT 1
+                ) AS judgename,
+                (
+                    SELECT TRIM(u.firstname || ' ' || u.lastname)
+                    FROM caselawyeraccess cla
+                    JOIN lawyer lw ON lw.lawyerid = cla.lawyerid
+                    JOIN users u   ON u.userid    = lw.userid
+                    WHERE cla.caseid = c.caseid LIMIT 1
+                ) AS lawyername,
+                (
+                    SELECT TRIM(u.firstname || ' ' || u.lastname)
+                    FROM caseparticipantaccess cpa
+                    JOIN caseparticipant cp ON cp.participantid = cpa.participantid
+                    JOIN users u            ON u.userid         = cp.userid
+                    WHERE cpa.caseid = c.caseid LIMIT 1
+                ) AS clientname,
+                (
+                    SELECT p.name
+                    FROM prosecutorassign pa
+                    JOIN prosecutor p ON p.prosecutorid = pa.prosecutorid
+                    WHERE pa.caseid = c.caseid LIMIT 1
+                ) AS prosecutorname
+            FROM cases c
+            WHERE c.caseid = %s
+            """,
+            (case_id,),
+        )
+        case = cur.fetchone()
+        if not case:
+            return jsonify({"error": "Case not found"}), 404
+
+        # ── helper ─────────────────────────────────────────────────────────
+        def ev(action, remarks="", date=None, status=None, eid=None, etype="auto", sort_offset=0):
+            """Build one timeline entry dict."""
+            d_str = date.isoformat() if date else None
+            # sort key: (date_str or filing fallback, offset within same date)
+            sk = (d_str or (case["filingdate"].isoformat() if case["filingdate"] else "0000-00-00"), sort_offset)
+            return {
+                "historyid":  eid,
+                "caseName":   case["title"],
+                "casenumber": case["casenumber"] or "—",
+                "judgeName":  case["judgename"]  or "—",
+                "clientName": case["clientname"] or "—",
+                "lawyerName": case["lawyername"] or "—",
+                "actionDate": d_str,
+                "actionTaken": action,
+                "remarks":    remarks,
+                "status":     status or case["status"],
+                "eventType":  etype,
+                "_sort_key":  sk,
+            }
+
+        events = []
+
+        # 1. Case filed
+        if case["filingdate"]:
+            events.append(ev(
+                f"Case filed — type: {case['casetype'] or 'N/A'}",
+                remarks="Case registered in the system.",
+                date=case["filingdate"],
+                status="Pending",
+                sort_offset=0,
+            ))
+
+        # 2. Case verified / opened by registrar
+        if case["casenumber"] and case["status"] in ("Open", "Closed"):
+            events.append(ev(
+                f"Case verified and opened by Court Registrar"
+                f" — assigned case number {case['casenumber']}",
+                date=case["filingdate"],   # best proxy available
+                status="Open",
+                sort_offset=1,
+            ))
+
+        # 3. Judge assigned
+        if case["judgename"]:
+            events.append(ev(
+                f"Judge assigned: {case['judgename']}",
+                date=case["filingdate"],
+                sort_offset=2,
+            ))
+
+        # 4. Prosecutor assigned
+        if case["prosecutorname"]:
+            events.append(ev(
+                f"Prosecutor assigned: {case['prosecutorname']}",
+                date=case["filingdate"],
+                sort_offset=3,
+            ))
+
+        # 5. Hearings
+        cur.execute(
+            """
+            SELECT hearingdate, hearingstatus
+            FROM hearings
+            WHERE caseid = %s
+            ORDER BY hearingdate ASC
+            """,
+            (case_id,),
+        )
+        for h in cur.fetchall():
+            label = (
+                f"Hearing — outcome: {h['hearingstatus']}"
+                if h["hearingstatus"] and h["hearingstatus"] != "scheduled"
+                else "Hearing scheduled"
+            )
+            events.append(ev(label, date=h["hearingdate"], sort_offset=10))
+
+        # 6. Bail
+        cur.execute(
+            "SELECT baildate, bailstatus, bailamount FROM bail WHERE caseid = %s",
+            (case_id,),
+        )
+        bail = cur.fetchone()
+        if bail and bail["baildate"]:
+            events.append(ev(
+                f"Bail application filed"
+                f" — amount: {bail['bailamount'] or 'N/A'}"
+                f", status: {bail['bailstatus'] or 'N/A'}",
+                date=bail["baildate"],
+                sort_offset=10,
+            ))
+
+        # 7. Appeals
+        cur.execute(
+            """
+            SELECT appealdate, decisiondate, appealstatus, decision
+            FROM appeals WHERE caseid = %s ORDER BY appealdate ASC
+            """,
+            (case_id,),
+        )
+        for ap in cur.fetchall():
+            if ap["appealdate"]:
+                events.append(ev("Appeal filed", date=ap["appealdate"], sort_offset=10))
+            if ap["decisiondate"] and ap["decision"]:
+                events.append(ev(
+                    f"Appeal decision: {ap['decision']}",
+                    date=ap["decisiondate"],
+                    status=ap["appealstatus"] or case["status"],
+                    sort_offset=10,
+                ))
+
+        # 8. Final decision
+        cur.execute(
+            """
+            SELECT decisiondate, verdict, decisionsummary
+            FROM finaldecision WHERE caseid = %s
+            ORDER BY decisiondate DESC LIMIT 1
+            """,
+            (case_id,),
+        )
+        fd = cur.fetchone()
+        if fd and fd["decisiondate"]:
+            events.append(ev(
+                f"Final verdict: {fd['verdict']}",
+                remarks=fd["decisionsummary"] or "",
+                date=fd["decisiondate"],
+                status="Closed",
+                sort_offset=20,
+            ))
+
+        # 9. Manual notes from casehistory table
+        cur.execute(
+            """
+            SELECT historyid, actiondate, actiontaken, remarks
+            FROM casehistory WHERE caseid = %s
+            ORDER BY actiondate ASC NULLS LAST
+            """,
+            (case_id,),
+        )
+        for row in cur.fetchall():
+            events.append(ev(
+                row["actiontaken"] or "",
+                remarks=row["remarks"] or "",
+                date=row["actiondate"],
+                eid=row["historyid"],
+                etype="manual",
+                sort_offset=5,
+            ))
+
+        # ── sort chronologically, remove internal key ──────────────────────
+        events.sort(key=lambda e: e["_sort_key"])
+        for e in events:
+            del e["_sort_key"]
+
+        return jsonify({"history": events}), 200
+
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    finally:
+        if conn:
+            conn.close()
 

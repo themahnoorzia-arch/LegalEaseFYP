@@ -1,179 +1,261 @@
-import React, { useState, useMemo } from 'react';
-import { Card, Table, InputGroup, Form, Row, Col, Badge, Button, Modal } from 'react-bootstrap';
-import { Search } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Card, Table, InputGroup, Form, Row, Col, Badge, Button, Modal, Spinner } from 'react-bootstrap';
+import { Search, CheckCircle } from 'lucide-react';
 
-const Billing = ({ payments = [], onCreatePayment }) => {
+const MODES = ['Cash', 'Credit/Debit card', 'Online Transfer'];
+
+const Billing = () => {
+  const [payments, setPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('All');
-  const [showModal, setShowModal] = useState(false);
-  const [form, setForm] = useState({
-    casename: '',
-    paymentdate: '',
-    mode: '',
-  });
-  const [courtPaymentData, setCourtPaymentData] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('All');
 
-  // Simulate fetching payment info from court table
-  const courtPayments = [
-  {
-    casename: 'State v. Smith',
-    purpose: 'Filing',
-    balance: 1000,
-    status: 'Pending',
-    courtname: 'Metropolis Central Courthouse'  // lowercase n
-  },
-  {
-    casename: 'People v. Doe',
-    purpose: 'Consultation',
-    balance: 2000,
-    status: 'Pending',
-    courtname: 'Metropolis Central Courthouse'  // lowercase n
-  }
-];
+  // Confirm payment modal
+  const [confirmPayment, setConfirmPayment] = useState(null); // the payment object
+  const [mode, setMode] = useState('Cash');
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmError, setConfirmError] = useState('');
 
+  useEffect(() => {
+    fetchPayments();
+  }, []);
 
-  const handleCaseChange = (e) => {
-    const casename = e.target.value;
-    setForm({ ...form, casename });
-    const found = courtPayments.find(p => p.casename === casename);
-    setCourtPaymentData(found || null);
+  const fetchPayments = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/payments', { credentials: 'include' });
+      const data = await res.json();
+      if (res.ok && data.payments) {
+        setPayments(data.payments);
+      }
+    } catch (e) {
+      console.error('Failed to load payments', e);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleSubmit = (e) => {
+  const handleConfirm = async (e) => {
     e.preventDefault();
-    if (!courtPaymentData) return;
-    onCreatePayment({
-      ...courtPaymentData,
-      paymentdate: form.paymentdate,
-      mode: form.mode
-    });
-    setShowModal(false);
-    setForm({ casename: '', paymentdate: '', mode: '' });
-    setCourtPaymentData(null);
+    setConfirming(true);
+    setConfirmError('');
+    try {
+      const res = await fetch(`/api/payments/${confirmPayment.paymentid}/confirm`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ mode, paymentdate: paymentDate }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to confirm');
+      setConfirmPayment(null);
+      fetchPayments();
+    } catch (e) {
+      setConfirmError(e.message);
+    } finally {
+      setConfirming(false);
+    }
   };
 
-  const filteredPayments = useMemo(() => {
-    return payments.filter(p => {
-      const matchesSearch =
-        p.casename?.toLowerCase().includes(search.toLowerCase()) ||
-        p.purpose?.toLowerCase().includes(search.toLowerCase());
-      const matchesStatus = status === 'All' || p.status === status;
-      return matchesSearch && matchesStatus;
-    });
-  }, [search, status, payments]);
+  const filtered = useMemo(() => payments.filter(p => {
+    const matchSearch =
+      (p.casename || '').toLowerCase().includes(search.toLowerCase()) ||
+      (p.purpose || '').toLowerCase().includes(search.toLowerCase());
+    const matchStatus = statusFilter === 'All' || p.status === statusFilter;
+    return matchSearch && matchStatus;
+  }), [payments, search, statusFilter]);
+
+  const pendingCount = payments.filter(p => p.status === 'Pending').length;
 
   return (
-    <Row className="justify-content-center align-items-start py-4 px-2 px-md-4">
-      <Col xs={12} md={11} lg={10} xl={9}>
-        <Card>
-          <Card.Header className="bg-white border-bottom-0 pb-0">
-            <div className="d-flex align-items-center gap-3 mb-2">
-              <h4 className="mb-0 fw-bold"><span className="me-2" role="img" aria-label="billing">💰</span>Billing & Payments</h4>
-              <Button variant="primary" size="sm" className="ms-auto" onClick={() => setShowModal(true)}>
-                Add Payment
-              </Button>
-            </div>
+    <Row className="justify-content-center py-4 px-2 px-md-4">
+      <Col xs={12} xl={11}>
+        {pendingCount > 0 && (
+          <div style={{
+            background: '#fef3c7', border: '1px solid #f59e0b', borderRadius: 10,
+            padding: '10px 16px', marginBottom: 16, fontSize: 14, color: '#92400e',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            ⚠️ You have <strong>{pendingCount}</strong> pending payment{pendingCount > 1 ? 's' : ''} awaiting confirmation.
+          </div>
+        )}
+
+        <Card className="shadow-sm">
+          <Card.Header className="bg-white border-bottom d-flex align-items-center gap-3">
+            <h5 className="mb-0 fw-bold" style={{ color: '#22304a' }}>💰 Billing & Payments</h5>
           </Card.Header>
-          <Card.Body className="pt-0">
+          <Card.Body>
             <Row className="g-2 mb-3">
               <Col md={8}>
                 <InputGroup>
-                  <InputGroup.Text><Search size={16} /></InputGroup.Text>
+                  <InputGroup.Text><Search size={15} /></InputGroup.Text>
                   <Form.Control
                     placeholder="Search by case or purpose..."
                     value={search}
                     onChange={e => setSearch(e.target.value)}
+                    style={{ borderRadius: '0 8px 8px 0' }}
                   />
                 </InputGroup>
               </Col>
               <Col md={4}>
-                <Form.Select value={status} onChange={e => setStatus(e.target.value)}>
+                <Form.Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ borderRadius: 8 }}>
                   <option value="All">All Statuses</option>
-                  <option value="Paid">Paid</option>
                   <option value="Pending">Pending</option>
+                  <option value="Paid">Paid</option>
                 </Form.Select>
               </Col>
             </Row>
-            <div className="table-responsive" style={{ maxHeight: 420, overflowY: 'auto' }}>
-              <Table hover className="align-middle mb-0">
-                <thead className="table-light">
-                  <tr>
-                    <th>Date</th>
-                    <th>Case Name</th>
-                    <th>Purpose</th>
-                    <th>Amount</th>
-                    <th>Mode</th>
-                    <th>Status</th>
-                    <th>Court Name</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPayments.length === 0 ? (
+
+            {loading ? (
+              <div className="text-center py-5"><Spinner animation="border" style={{ color: '#1ec6b6' }} /></div>
+            ) : (
+              <div className="table-responsive" style={{ maxHeight: 460, overflowY: 'auto' }}>
+                <Table hover className="align-middle mb-0">
+                  <thead className="table-light sticky-top">
                     <tr>
-                      <td colSpan={7} className="text-center text-muted py-4">No payments found.</td>
+                      <th>Case</th>
+                      <th>Purpose</th>
+                      <th>Type</th>
+                      <th>Amount</th>
+                      <th>Mode</th>
+                      <th>Date</th>
+                      <th>Court</th>
+                      <th>Status</th>
+                      <th></th>
                     </tr>
-                  ) : (
-                    filteredPayments.map((p, idx) => (
-                      <tr key={idx}>
-                        <td>{p.paymentdate}</td>
-                        <td>{p.casename}</td>
-                        <td>{p.purpose}</td>
-                        <td>${p.balance}</td>
-                        <td>{p.mode}</td>
-                        <td>
-                          <Badge bg={p.status === 'Paid' ? 'success' : 'warning'} className="px-3 py-1 fs-6">
-                            {p.status}
-                          </Badge>
+                  </thead>
+                  <tbody>
+                    {filtered.length === 0 ? (
+                      <tr>
+                        <td colSpan={9} className="text-center text-muted py-5">
+                          No payments found.
                         </td>
-                        <td>{p.courtname}</td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </Table>
-            </div>
+                    ) : (
+                      filtered.map((p) => (
+                        <tr key={p.paymentid}>
+                          <td className="fw-semibold">{p.casename || '—'}</td>
+                          <td>{p.purpose || '—'}</td>
+                          <td>{p.paymenttype || '—'}</td>
+                          <td>PKR {Number(p.balance || 0).toLocaleString()}</td>
+                          <td>{p.mode || <span className="text-muted">—</span>}</td>
+                          <td>{p.paymentdate || <span className="text-muted">—</span>}</td>
+                          <td>{p.courtname || '—'}</td>
+                          <td>
+                            <Badge
+                              bg={p.status === 'Paid' ? 'success' : 'warning'}
+                              style={{ fontSize: 12 }}
+                            >
+                              {p.status}
+                            </Badge>
+                          </td>
+                          <td>
+                            {p.status === 'Pending' && (
+                              <Button
+                                size="sm"
+                                onClick={() => {
+                                  setConfirmPayment(p);
+                                  setMode('Cash');
+                                  setPaymentDate(new Date().toISOString().split('T')[0]);
+                                  setConfirmError('');
+                                }}
+                                style={{
+                                  background: '#1ec6b6', border: 'none',
+                                  borderRadius: 6, fontSize: 12, fontWeight: 600,
+                                }}
+                              >
+                                Confirm Payment
+                              </Button>
+                            )}
+                            {p.status === 'Paid' && (
+                              <CheckCircle size={16} style={{ color: '#16a34a' }} />
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </Table>
+              </div>
+            )}
           </Card.Body>
         </Card>
-        <Modal show={showModal} onHide={() => setShowModal(false)} centered>
+
+        {/* Confirm Payment Modal */}
+        <Modal show={!!confirmPayment} onHide={() => setConfirmPayment(null)} centered>
           <Modal.Header closeButton>
-            <Modal.Title>Add Payment</Modal.Title>
+            <Modal.Title style={{ fontSize: 18, fontWeight: 700, color: '#22304a' }}>
+              Confirm Payment
+            </Modal.Title>
           </Modal.Header>
-          <Form onSubmit={handleSubmit}>
+          <form onSubmit={handleConfirm}>
             <Modal.Body>
-              {courtPaymentData && (
-                <>
-                  <Form.Group className="mb-3">
-                    <Form.Label>Purpose</Form.Label>
-                    <Form.Control value={courtPaymentData.purpose} disabled readOnly />
-                  </Form.Group>
-                  <Form.Group className="mb-3">
-                    <Form.Label>Amount</Form.Label>
-                    <Form.Control value={courtPaymentData.balance} disabled readOnly />
-                  </Form.Group>
-                  <Form.Group className="mb-3">
-                    <Form.Label>Status</Form.Label>
-                    <Form.Control value={courtPaymentData.status} disabled readOnly />
-                  </Form.Group>
-                  <Form.Group className="mb-3">
-                    <Form.Label>Court Name</Form.Label>
-                    <Form.Control value={courtPaymentData.courtName} disabled readOnly />
-                  </Form.Group>
-                </>
+              {confirmError && (
+                <div className="alert alert-danger py-2">{confirmError}</div>
               )}
+              {confirmPayment && (
+                <div style={{ background: '#f8f9fa', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
+                  <div className="d-flex justify-content-between mb-1">
+                    <span className="text-muted small">Case</span>
+                    <span className="fw-semibold">{confirmPayment.casename}</span>
+                  </div>
+                  <div className="d-flex justify-content-between mb-1">
+                    <span className="text-muted small">Purpose</span>
+                    <span>{confirmPayment.purpose}</span>
+                  </div>
+                  <div className="d-flex justify-content-between">
+                    <span className="text-muted small">Amount</span>
+                    <span className="fw-bold" style={{ color: '#1ec6b6' }}>
+                      PKR {Number(confirmPayment.balance || 0).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               <Form.Group className="mb-3">
-                <Form.Label>Payment Mode</Form.Label>
-                <Form.Control type="text" value={form.mode} onChange={e => setForm({ ...form, mode: e.target.value })} required />
+                <Form.Label className="fw-semibold" style={{ fontSize: 14 }}>Payment Method</Form.Label>
+                <div className="d-flex flex-column gap-2">
+                  {MODES.map(m => (
+                    <label key={m} style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '10px 14px', borderRadius: 8, cursor: 'pointer',
+                      border: `2px solid ${mode === m ? '#1ec6b6' : '#e5e7eb'}`,
+                      background: mode === m ? '#e0f7f5' : '#fff',
+                    }}>
+                      <input
+                        type="radio" name="mode" value={m}
+                        checked={mode === m} onChange={() => setMode(m)}
+                        style={{ accentColor: '#1ec6b6' }}
+                      />
+                      <span style={{ fontWeight: 600, fontSize: 14, color: '#22304a' }}>{m}</span>
+                    </label>
+                  ))}
+                </div>
               </Form.Group>
-              <Form.Group className="mb-3">
-                <Form.Label>Payment Date</Form.Label>
-                <Form.Control type="date" value={form.paymentdate} onChange={e => setForm({ ...form, paymentdate: e.target.value })} required />
+
+              <Form.Group>
+                <Form.Label className="fw-semibold" style={{ fontSize: 14 }}>Payment Date</Form.Label>
+                <Form.Control
+                  type="date"
+                  value={paymentDate}
+                  onChange={e => setPaymentDate(e.target.value)}
+                  required
+                  style={{ borderRadius: 8 }}
+                />
               </Form.Group>
             </Modal.Body>
             <Modal.Footer>
-              <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
-              <Button variant="primary" type="submit" disabled={!courtPaymentData}>Add Payment</Button>
+              <Button variant="secondary" onClick={() => setConfirmPayment(null)}>Cancel</Button>
+              <Button
+                type="submit"
+                disabled={confirming}
+                style={{ background: '#1ec6b6', border: 'none', fontWeight: 600 }}
+              >
+                {confirming ? <Spinner size="sm" animation="border" /> : 'Mark as Paid'}
+              </Button>
             </Modal.Footer>
-          </Form>
+          </form>
         </Modal>
       </Col>
     </Row>

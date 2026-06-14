@@ -16,6 +16,9 @@ import Surety from './pages/Surety.jsx';
 import CourtRegistrationPage from './pages/CourtRegistrationForm.jsx';
 import ClientDashboard from './pages/ClientDashboard.jsx';
 import JudgeProfile from './pages/JudgeProfile.jsx';
+import VerifyEmail from './pages/VerifyEmail.jsx';
+import VerifyOTP from './pages/VerifyOTP.jsx';
+import ForgotPassword from './pages/ForgotPassword.jsx';
 import './index.css';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
@@ -27,6 +30,9 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
+        <Route path="/verify-otp" element={<VerifyOTP />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
     
         <Route path="/CompleteProfile" element={<CompleteProfile />} />
         

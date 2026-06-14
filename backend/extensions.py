@@ -20,6 +20,7 @@ import logging
 from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_login import LoginManager
+from flask_mail import Mail
 from flask_session import Session
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 login_manager: LoginManager = LoginManager()
 sess: Session = Session()
 cors: CORS = CORS()
+mail: Mail = Mail()
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +103,9 @@ def register_extensions(app: Flask) -> None:
         supports_credentials=True,
         origins=allowed_origins,
     )
+
+    # -- Flask-Mail ----------------------------------------------------------
+    mail.init_app(app)
 
     # -- Flask-Login ---------------------------------------------------------
     login_manager.init_app(app)

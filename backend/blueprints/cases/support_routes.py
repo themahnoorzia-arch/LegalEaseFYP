@@ -76,135 +76,108 @@ def get_lawyerappeals():
 @cases_bp.route("/bails", methods=["GET"])
 @login_required
 def get_bails_for_lawyer():
-    db = SessionLocal()
+    if current_user.role != "Lawyer":
+        return jsonify({"message": "Access denied"}), 403
+    conn = None
     try:
-        if current_user.role != "Lawyer":
-            return jsonify({"message": "Access denied"}), 403
-
-        lawyer = db.query(Lawyer).filter_by(userid=current_user.userid).first()
-        if not lawyer:
-            return jsonify({"bails": []}), 200
-
-        bails = (
-            db.query(Bail)
-            .join(Cases, Bail.caseid == Cases.caseid)
-            .join(Cases.lawyer)
-            .filter(Lawyer.lawyerid == lawyer.lawyerid)
-            .all()
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT b.bailid, b.caseid, b.bailstatus, b.bailamount,
+                   b.baildate, b.remarks, b.bailcondition
+            FROM bail b
+            JOIN caselawyeraccess cla ON cla.caseid = b.caseid
+            JOIN lawyer l ON l.lawyerid = cla.lawyerid
+            WHERE l.userid = %s
+            """,
+            (current_user.userid,),
         )
-
-        result = [
-            {
-                "bailid": b.bailid,
-                "caseid": b.caseid,
-                "bailstatus": b.bailstatus,
-                "bailamount": float(b.bailamount) if b.bailamount else None,
-                "baildate": b.baildate.isoformat() if b.baildate else None,
-                "remarks": b.remarks,
-                "bailcondition": b.bailcondition,
-            }
-            for b in bails
-        ]
+        rows = cur.fetchall()
+        result = []
+        for r in rows:
+            row = dict(r)
+            if row.get("baildate"):
+                row["baildate"] = row["baildate"].isoformat()
+            if row.get("bailamount"):
+                row["bailamount"] = float(row["bailamount"])
+            result.append(row)
         return jsonify({"bails": result}), 200
     except Exception as e:
         return jsonify({"message": str(e)}), 500
     finally:
-        db.close()
+        if conn:
+            conn.close()
 
 
 @cases_bp.route("/surety/from-lawyer", methods=["GET"])
 @login_required
 def get_surety_by_lawyer():
-    db = SessionLocal()
+    if current_user.role != "Lawyer":
+        return jsonify({"message": "Only lawyers can access this resource"}), 403
+    conn = None
     try:
-        if current_user.role != "Lawyer":
-            return jsonify({"message": "Only lawyers can access this resource"}), 403
-
-        lawyer = db.query(Lawyer).filter_by(userid=current_user.userid).first()
-        if not lawyer:
-            return jsonify({"message": "Lawyer not found"}), 404
-
-        bail = (
-            db.query(Bail)
-            .join(Cases, Bail.caseid == Cases.caseid)
-            .join(
-                t_caselawyeraccess,
-                t_caselawyeraccess.c.caseid == Cases.caseid,
-            )
-            .filter(t_caselawyeraccess.c.lawyerid == lawyer.lawyerid)
-            .first()
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT s.suretyid, s.firstname, s.lastname, s.cnic,
+                   s.phone, s.email, s.address, s.pasthistory,
+                   c.title AS casename
+            FROM surety s
+            JOIN bail b ON b.suretyid = s.suretyid
+            JOIN caselawyeraccess cla ON cla.caseid = b.caseid
+            JOIN lawyer l ON l.lawyerid = cla.lawyerid
+            JOIN cases c ON c.caseid = b.caseid
+            WHERE l.userid = %s
+            LIMIT 1
+            """,
+            (current_user.userid,),
         )
-
-        if not bail:
-            return jsonify({"message": "No bail found for this lawyer", "surety": None}), 200
-
-        surety = bail.surety
-        if not surety:
-            return jsonify({"message": "Surety not found for the bail", "surety": None}), 200
-
-        case = db.query(Cases).filter_by(caseid=bail.caseid).first()
-        return jsonify(
-            {
-                "suretyid": surety.suretyid,
-                "firstname": surety.firstname,
-                "lastname": surety.lastname,
-                "cnic": surety.cnic,
-                "phone": surety.phone,
-                "email": surety.email,
-                "address": surety.address,
-                "pasthistory": surety.pasthistory,
-                "casename": case.title if case else "Unknown",
-            }
-        ), 200
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"message": "No surety found for this lawyer", "surety": None}), 200
+        return jsonify(dict(row)), 200
     except Exception as e:
         return jsonify({"message": str(e)}), 500
     finally:
-        db.close()
+        if conn:
+            conn.close()
 
 
 @cases_bp.route("/lawyer/evidence", methods=["GET"])
 @login_required
 def get_evidence_for_logged_in_lawyer():
-    db = SessionLocal()
+    if current_user.role != "Lawyer":
+        return jsonify({"message": "Access denied: User is not a lawyer"}), 403
+    conn = None
     try:
-        if current_user.role != "Lawyer":
-            return jsonify({"message": "Access denied: User is not a lawyer"}), 403
-
-        lawyer = db.query(Lawyer).filter_by(userid=current_user.userid).first()
-        if not lawyer:
-            return jsonify({"evidence": []}), 200
-
-        case_ids = [
-            row[0]
-            for row in db.query(t_caselawyeraccess.c.caseid).filter(
-                t_caselawyeraccess.c.lawyerid == lawyer.lawyerid
-            ).all()
-        ]
-
-        if not case_ids:
-            return jsonify({"evidence": []}), 200
-
-        evidence_entries = (
-            db.query(Evidence).filter(Evidence.caseid.in_(case_ids)).all()
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT e.evidenceid AS evidence_id, e.caseid AS case_id,
+                   e.evidencetype, e.description, e.filepath, e.submitteddate
+            FROM evidence e
+            JOIN caselawyeraccess cla ON cla.caseid = e.caseid
+            JOIN lawyer l ON l.lawyerid = cla.lawyerid
+            WHERE l.userid = %s
+            """,
+            (current_user.userid,),
         )
-        result = [
-            {
-                "evidence_id": e.evidenceid,
-                "case_id": e.caseid,
-                "evidencetype": e.evidencetype,
-                "description": e.description,
-                "filepath": e.filepath,
-                "submitteddate": (
-                    e.submitteddate.isoformat() if e.submitteddate else None
-                ),
-            }
-            for e in evidence_entries
-        ]
+        rows = cur.fetchall()
+        result = []
+        for r in rows:
+            row = dict(r)
+            if row.get("submitteddate"):
+                row["submitteddate"] = row["submitteddate"].isoformat()
+            result.append(row)
         return jsonify({"evidence": result}), 200
     except Exception as e:
         return jsonify({"message": str(e)}), 500
     finally:
-        db.close()
+        if conn:
+            conn.close()
 
 
 @cases_bp.route("/documents", methods=["GET"])
@@ -285,3 +258,43 @@ def get_all_witnesses():
         return jsonify({"message": str(e)}), 500
     finally:
         db.close()
+
+
+@cases_bp.route("/evidence", methods=["GET"])
+@login_required
+def get_all_evidence():
+    conn = None
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(
+            """
+            SELECT
+                e.evidenceid    AS id,
+                e.evidencetype  AS "evidenceType",
+                e.description,
+                e.filepath,
+                e.submitteddate AS date,
+                c.title         AS "caseName"
+            FROM evidence e
+            JOIN cases c ON c.caseid = e.caseid
+            ORDER BY e.submitteddate DESC NULLS LAST
+            """
+        )
+        rows = cur.fetchall()
+        result = []
+        for row in rows:
+            result.append({
+                "id": row["id"],
+                "evidenceType": row["evidenceType"],
+                "description": row["description"],
+                "filepath": row["filepath"],
+                "date": row["date"].isoformat() if row["date"] else None,
+                "caseName": row["caseName"],
+            })
+        return jsonify({"evidence": result}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()

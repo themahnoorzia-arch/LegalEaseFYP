@@ -1,5 +1,7 @@
-from flask import jsonify, request
+import os
+from flask import jsonify, request, send_file
 from flask_login import login_required, current_user
+from werkzeug.utils import secure_filename
 
 from blueprints.users import users_bp
 from db.db import SessionLocal
@@ -536,3 +538,47 @@ def get_judge_profile():
         return jsonify(success=False, message=str(e)), 500
     finally:
         db.close()
+
+
+# ---------------------------------------------------
+# PROFILE PHOTO UPLOAD / SERVE
+# ---------------------------------------------------
+_PHOTO_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'uploads', 'profile_photos')
+_ALLOWED_IMG = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+
+
+@users_bp.route("/api/profile/photo", methods=["POST"])
+@login_required
+def upload_profile_photo():
+    if 'photo' not in request.files:
+        return jsonify({"message": "No file provided"}), 400
+    file = request.files['photo']
+    if not file or file.filename == '':
+        return jsonify({"message": "Empty filename"}), 400
+    ext = os.path.splitext(secure_filename(file.filename))[1].lower()
+    if ext not in _ALLOWED_IMG:
+        return jsonify({"message": "Only image files are allowed"}), 400
+    os.makedirs(_PHOTO_DIR, exist_ok=True)
+    # Remove any existing photo for this user first
+    for old_ext in _ALLOWED_IMG:
+        old_path = os.path.join(_PHOTO_DIR, f"{current_user.userid}{old_ext}")
+        if os.path.exists(old_path):
+            os.remove(old_path)
+    filename = f"{current_user.userid}{ext}"
+    file.save(os.path.join(_PHOTO_DIR, filename))
+    return jsonify({"message": "Photo uploaded", "url": f"/api/profile/photo/{current_user.userid}"}), 200
+
+
+@users_bp.route("/api/profile/photo/me", methods=["GET"])
+@login_required
+def get_my_profile_photo():
+    return get_profile_photo(current_user.userid)
+
+
+@users_bp.route("/api/profile/photo/<int:user_id>", methods=["GET"])
+def get_profile_photo(user_id):
+    for ext in _ALLOWED_IMG:
+        path = os.path.join(_PHOTO_DIR, f"{user_id}{ext}")
+        if os.path.exists(path):
+            return send_file(os.path.abspath(path))
+    return jsonify({"message": "No photo found"}), 404

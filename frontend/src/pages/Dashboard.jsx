@@ -4,7 +4,7 @@ import { Image, Card, Row, Col, InputGroup, Form, Button, Badge, Table, Modal } 
 import { User, PlusCircle, Search, LogOut } from 'lucide-react';
 import SidebarNav from '../components/dashboard/SidebarNav';
 import CalendarSummary from '../components/dashboard/CalendarSummary';
-import DocumentManagement from '../components/dashboard/DocumentManagement';
+import CaseDocuments from '../components/CaseDocuments';
 import Notifications from '../components/dashboard/Notifications';
 import Billing from '../components/dashboard/Billing';
 import Appeals from '../components/dashboard/Appeals';
@@ -13,11 +13,21 @@ import Surety from './Surety.jsx';
 import Evidence from './Evidence.jsx';
 import Witnesses from './Witnesses.jsx';
 
-const PROFILE_IMAGE_KEY = 'lawyerProfileImage';
 
 const Dashboard = () => {
   const [activeView, setActiveView] = useState('cases');
-  const [profileImage, setProfileImage] = useState(null);
+  const [profileImage, setProfileImage] = useState(`/api/profile/photo/me?t=${Date.now()}`);
+  const photoInputRef = React.useRef(null);
+  const handlePhotoUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('photo', file);
+    try {
+      const res = await fetch('/api/profile/photo', { method: 'POST', credentials: 'include', body: fd });
+      if (res.ok) setProfileImage(`/api/profile/photo/me?t=${Date.now()}`);
+    } catch { /* silent */ }
+  };
   const [lawyerData, setLawyerData] = useState(null);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -50,57 +60,43 @@ const Dashboard = () => {
   const [status, setStatus] = useState('All');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [historyCase, setHistoryCase] = useState(null);
+  const [loadingTimeline, setLoadingTimeline] = useState(false);
   const [showDecisionModal, setShowDecisionModal] = useState(false);
   const [decisionCase, setDecisionCase] = useState(null);
 
-  const remands = [
-    { caseName: 'State v. Smith', clientName: 'Jane Smith', status: 'Active' },
-    { caseName: 'People v. Doe', clientName: 'John Doe', status: 'Completed' }
-  ];
 
   const filteredCases = cases.filter(case_ => {
-    const matchesSearch = 
-      case_.title.toLowerCase().includes(search.toLowerCase()) ||
-      case_.caseType.toLowerCase().includes(search.toLowerCase()) ||
-      case_.description.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch =
+      (case_.title || '').toLowerCase().includes(search.toLowerCase()) ||
+      (case_.caseType || '').toLowerCase().includes(search.toLowerCase()) ||
+      (case_.description || '').toLowerCase().includes(search.toLowerCase());
 
     const matchesStatus = status === 'All' || case_.status === status;
     return matchesSearch && matchesStatus;
   });
 
-// useEffect(() => {
-//   const fetchCaseHistory = async () => {
-//     if (historyCase) {
-//       try {
-//         const res = await fetch(`/api/cases/${historyCase.id}/history`, {
-//           headers: {
-//             'Authorization': `Bearer ${localStorage.getItem('userToken')}`,
-//             'Content-Type': 'application/json'
-//           },
-//           credentials: 'include'
-//         });
-        
-//         if (!res.ok) throw new Error('Failed to fetch case history');
+  const getCaseHistory = async (caseId) => {
+    try {
+      const res = await fetch(`/api/cases/${caseId}/history`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) return [];
+      return data.history || [];
+    } catch { return []; }
+  };
 
-//         const data = await res.json();
-
-//         // Check if history data exists and is in the expected format
-//         if (data && Array.isArray(data.history)) {
-//           setCaseHistory(data.history);
-//         } else {
-//           setCaseHistory([]); // Set to empty array if data is invalid
-//         }
-//       } catch (err) {
-//         console.error('Failed to fetch case history:', err);
-//         setCaseHistory([]); // Set to empty array on error
-//       }
-//     }
-//   };
-
-//   if (showHistoryModal && historyCase) {
-//     fetchCaseHistory();
-//   }
-// }, [showHistoryModal, historyCase]);  
+  const handleViewHistory = async (case_) => {
+    setHistoryCase(case_);
+    setCaseHistory([]);
+    setLoadingTimeline(true);
+    setShowHistoryModal(true);
+    const history = await getCaseHistory(case_.id);
+    setCaseHistory(history);
+    setLoadingTimeline(false);
+  };
 
 
   useEffect(() => {
@@ -141,8 +137,7 @@ const Dashboard = () => {
 
         if (result.success) {
           setLawyerData(result.user);
-          const storedImage = localStorage.getItem(PROFILE_IMAGE_KEY);
-          setProfileImage(storedImage || 'https://via.placeholder.com/40');
+          setProfileImage(`/api/profile/photo/me?t=${Date.now()}`);
 
           const paymentRes = await fetch('/api/payments', {
             method: 'GET',
@@ -306,17 +301,20 @@ const handleCaseSubmit = async (e) => {
     } else {
       // Add the new case to the state if it's a new case
         const addedCase = {
-        caseid: data.case_id, // case_id returned from the backend
-        title: caseForm.title,
-        description: caseForm.description,
-        casetype: caseForm.caseType,
-        clientName: caseForm.clientName,
-        judgeName: caseForm.judgeName,
-        status: 'Open',
-        filingdate: new Date().toISOString().split('T')[0],
-      };
+          id: data.case_id,
+          title: caseForm.title,
+          description: caseForm.description,
+          caseType: caseForm.caseType,
+          clientName: caseForm.clientName,
+          courtName: caseForm.courtName || 'N/A',
+          judgeName: 'N/A',
+          prosecutor: 'N/A',
+          status: 'Pending',
+          filingDate: new Date().toISOString().split('T')[0],
+          history: [],
+        };
 
-      setCases([addedCase, ...cases]);
+        setCases([addedCase, ...cases]);
     }
 
     // Close the modal and reset the form
@@ -417,7 +415,6 @@ const handleCaseSubmit = async (e) => {
                       </tr>
                     ) : (
                       filteredCases.map((case_) => {
-                        const remand = remands.find(r => r.caseName === case_.title && r.clientName === case_.clientName);
                         return (
                           <tr key={case_.id}>
                             <td>{case_.title}</td>
@@ -464,7 +461,7 @@ const handleCaseSubmit = async (e) => {
 </td>
 
                             <td>
-                              <Button variant="link" size="sm" onClick={() => { setHistoryCase(case_); setShowHistoryModal(true); }}>View</Button>
+                              <Button variant="link" size="sm" onClick={() => handleViewHistory(case_)}>View</Button>
                             </td>
                             <td>
                               <Button 
@@ -492,9 +489,9 @@ const handleCaseSubmit = async (e) => {
       case 'calendar':
         return <CalendarSummary />;
       case 'documents':
-        return <DocumentManagement />;
+        return <CaseDocuments cases={cases} userRole="Lawyer" />;
       case 'billing':
-        return <Billing payments={payments} onCreatePayment={createPayment} />;
+        return <Billing />;
       case 'appeals':
         return <Appeals />;
       case 'bail':
@@ -533,13 +530,16 @@ const handleCaseSubmit = async (e) => {
             <h4 className="mb-0" style={{ color: '#fff', fontWeight: 700 }}>Lawyer Dashboard</h4>
             <span style={{ color: 'rgba(255,255,255,0.7)' }}>|</span>
             <div className="d-flex align-items-center gap-2">
+              <input type="file" accept="image/*" ref={photoInputRef} onChange={handlePhotoUpload} className="d-none" />
               <Image
                 src={profileImage}
                 roundedCircle
                 width={40}
                 height={40}
                 className="border"
-                style={{ borderColor: '#fff' }}
+                style={{ borderColor: '#fff', cursor: 'pointer' }}
+                onClick={() => photoInputRef.current?.click()}
+                onError={e => { e.target.onerror = null; e.target.src = 'https://via.placeholder.com/40'; }}
               />
               <div>
                 <h6 className="mb-0" style={{ color: '#fff', fontWeight: 600 }}>{lawyerData?.username}</h6>
@@ -870,19 +870,63 @@ const handleCaseSubmit = async (e) => {
           <Button variant="secondary" onClick={() => setShowDecisionModal(false)}>Close</Button>
         </Modal.Footer>
       </Modal>
-<Modal show={showHistoryModal} onHide={() => setShowHistoryModal(false)} centered>
+<Modal show={showHistoryModal} onHide={() => setShowHistoryModal(false)} centered size="lg">
   <Modal.Header closeButton>
-    <Modal.Title>Case History</Modal.Title>
+    <div>
+      <Modal.Title className="fw-bold">{historyCase?.title || 'Case History'}</Modal.Title>
+      {historyCase?.casenumber && <small className="text-muted">{historyCase.casenumber}</small>}
+    </div>
   </Modal.Header>
-  <Modal.Body>
-    {historyCase?.history?.length > 0 ? (
-      <ul>
-        {historyCase.history.map((h, idx) => (
-          <li key={idx}><strong>{h.date}:</strong> {h.event}</li>
-        ))}
-      </ul>
+  <Modal.Body style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+    {historyCase && (
+      <div className="d-flex flex-wrap gap-3 mb-4 p-3 rounded" style={{ background: '#f8f9fa' }}>
+        <div><span className="text-muted small">Type</span><br /><strong>{historyCase.caseType || '—'}</strong></div>
+        <div><span className="text-muted small">Status</span><br />
+          <Badge bg={historyCase.status === 'Closed' ? 'success' : historyCase.status === 'Open' ? 'primary' : 'secondary'}>
+            {historyCase.status || '—'}
+          </Badge>
+        </div>
+        <div><span className="text-muted small">Filed</span><br /><strong>{historyCase.filingDate || '—'}</strong></div>
+      </div>
+    )}
+    {loadingTimeline ? (
+      <div className="text-center text-muted py-4">
+        <div style={{ fontSize: 32 }}>⏳</div>
+        <div>Loading timeline...</div>
+      </div>
+    ) : caseHistory.length === 0 ? (
+      <div className="text-center text-muted py-4">
+        <div style={{ fontSize: 32 }}>📋</div>
+        <div>No history recorded for this case yet.</div>
+      </div>
     ) : (
-      <div className="text-center text-muted">No history available for this case.</div>
+      <div style={{ position: 'relative', paddingLeft: 28 }}>
+        <div style={{ position: 'absolute', left: 10, top: 0, bottom: 0, width: 2, background: '#dee2e6' }} />
+        {caseHistory.map((entry, idx) => {
+          const isAuto = entry.eventType === 'auto';
+          const dotColor = isAuto ? '#6c757d' : '#0d6efd';
+          return (
+            <div key={entry.historyid || idx} className="mb-4" style={{ position: 'relative' }}>
+              <div style={{
+                position: 'absolute', left: -22, top: 4,
+                width: 14, height: 14, borderRadius: '50%',
+                background: dotColor, border: '2px solid #fff',
+                boxShadow: '0 0 0 2px ' + dotColor,
+              }} />
+              <div className="ps-2">
+                <div className="d-flex align-items-center gap-2 mb-1 flex-wrap">
+                  <span className="text-muted small">{entry.actionDate || '—'}</span>
+                  <Badge bg={isAuto ? 'secondary' : 'info'} style={{ fontSize: '0.65rem' }}>
+                    {isAuto ? 'System' : 'Note'}
+                  </Badge>
+                </div>
+                <div className="fw-semibold">{entry.actionTaken || entry.event || '—'}</div>
+                {entry.remarks && <div className="text-muted small mt-1">{entry.remarks}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     )}
   </Modal.Body>
   <Modal.Footer>

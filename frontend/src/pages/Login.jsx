@@ -45,6 +45,8 @@ const Login = () => {
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [unverifiedEmail, setUnverifiedEmail] = useState(null);
+  const [resendStatus, setResendStatus] = useState(null);
   const navigate = useNavigate();
 
   const isEmailValid = (email) => /\S+@\S+\.\S+/.test(email);
@@ -120,6 +122,9 @@ const Login = () => {
       } else {
         setError('Unknown role.');
       }
+    } else if (response.status === 403 && result.email_not_verified) {
+      setUnverifiedEmail(result.email || email);
+      setError(null);
     } else if (isMockLawyer || isMockCourtRegistrar || isMockAdmin || isMockJudge || isMockClient) {
       // Fallback to mock credentials if API fails
       let role;
@@ -163,6 +168,21 @@ const Login = () => {
     setIsLoading(false);
   }
 };
+
+  const handleResend = async () => {
+    setResendStatus('sending');
+    try {
+      const res = await fetch('/api/resend-verification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: unverifiedEmail }),
+      });
+      const data = await res.json();
+      setResendStatus(data.success ? 'sent' : 'error');
+    } catch {
+      setResendStatus('error');
+    }
+  };
 
   return (
     <div style={{
@@ -225,9 +245,31 @@ const Login = () => {
         <p className="text-muted mb-2" style={{ fontSize: '0.95rem' }}>Log in to your LegalEase account.</p>
         {error && (
           <Alert variant="danger" onClose={() => setError(null)} dismissible style={{ borderRadius: '0.75rem', fontSize: '0.95rem', marginBottom: '0.5rem' }}>
-              {error}
-            </Alert>
-          )}
+            {error}
+          </Alert>
+        )}
+        {unverifiedEmail && (
+          <Alert variant="warning" onClose={() => { setUnverifiedEmail(null); setResendStatus(null); }} dismissible style={{ borderRadius: '0.75rem', fontSize: '0.94rem', marginBottom: '0.5rem' }}>
+            <div className="fw-semibold mb-1">Email not verified</div>
+            <div style={{ fontSize: 13 }}>Please check your inbox at <strong>{unverifiedEmail}</strong> and click the verification link.</div>
+            <div className="mt-2">
+              {resendStatus === 'sent' ? (
+                <span style={{ color: '#15803d', fontWeight: 600 }}>✓ New link sent! Check your inbox.</span>
+              ) : resendStatus === 'error' ? (
+                <span style={{ color: '#dc2626' }}>Failed to send. Try again later.</span>
+              ) : (
+                <button
+                  className="btn btn-sm btn-outline-warning"
+                  onClick={handleResend}
+                  disabled={resendStatus === 'sending'}
+                  style={{ fontSize: 13 }}
+                >
+                  {resendStatus === 'sending' ? 'Sending…' : 'Resend verification email'}
+                </button>
+              )}
+            </div>
+          </Alert>
+        )}
         <Form onSubmit={handleSubmit} style={{width: '100%'}}>
           <Form.Group className="mb-2">
             <Form.Label className="fw-bold" style={{ fontSize: '0.97rem', marginBottom: 2 }}>Email address</Form.Label>
@@ -293,6 +335,11 @@ const Login = () => {
               )}
             </Button>
           <div className="text-center" style={{ fontSize: '0.95rem', marginTop: 2 }}>
+            <p className="mb-1">
+              <Link to="/forgot-password" style={{ color: '#6b7280', textDecoration: 'none', fontSize: '0.9rem' }}>
+                Forgot password?
+              </Link>
+            </p>
             <p className="mb-0">
               Don't have an account?{' '}
               <Link to="/signup" style={{ color: '#1ec6b6', textDecoration: 'none', fontWeight: '600' }}>

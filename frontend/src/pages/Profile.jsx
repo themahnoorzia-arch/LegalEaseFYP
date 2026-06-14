@@ -2,11 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Container, Row, Col, Card, Form, Button, Image } from 'react-bootstrap';
 import { Mail, Phone, MapPin, Briefcase, Award, Upload } from 'lucide-react';
 
-const PROFILE_IMAGE_KEY = 'lawyerProfileImage';
-
 const Profile = () => {
   const [isEditing, setIsEditing] = useState(false);
-  const [profileImage, setProfileImage] = useState(null);
+  const [profileImage, setProfileImage] = useState(`/api/profile/photo/me?t=${Date.now()}`);
   const fileInputRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -24,9 +22,6 @@ const Profile = () => {
   });
 
   useEffect(() => {
-    const storedImage = localStorage.getItem(PROFILE_IMAGE_KEY);
-    if (storedImage) setProfileImage(storedImage);
-
     const fetchProfile = async () => {
       try {
         const res = await fetch('/api/lawyerprofile', {
@@ -98,16 +93,15 @@ const Profile = () => {
     }
   };
 
-  const handleImageUpload = (event) => {
+  const handleImageUpload = async (event) => {
     const file = event.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setProfileImage(reader.result);
-        localStorage.setItem(PROFILE_IMAGE_KEY, reader.result);
-      };
-      reader.readAsDataURL(file);
-    }
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('photo', file);
+    try {
+      const res = await fetch('/api/profile/photo', { method: 'POST', credentials: 'include', body: fd });
+      if (res.ok) setProfileImage(`/api/profile/photo/me?t=${Date.now()}`);
+    } catch { /* silent */ }
   };
 
   const triggerImageUpload = () => fileInputRef.current.click();
@@ -138,11 +132,12 @@ const Profile = () => {
               <Card.Body className="text-center">
                 <div className="position-relative d-inline-block mb-3">
                   <Image
-                    src={profileImage || 'https://via.placeholder.com/150'}
+                    src={profileImage}
                     roundedCircle
                     width={110}
                     height={110}
                     className="border border-4"
+                    onError={e => { e.target.onerror = null; e.target.src = 'https://via.placeholder.com/150'; }}
                     style={{ 
                       objectFit: 'cover',
                       borderColor: '#1ec6b6 !important'

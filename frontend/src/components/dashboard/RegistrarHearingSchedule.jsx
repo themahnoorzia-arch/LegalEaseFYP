@@ -8,12 +8,11 @@ const RegistrarHearingSchedule = () => {
   const [hearings, setHearings] = useState([]);
 
   useEffect(() => {
-    // Fetch hearings from the backend when the component loads
     const fetchHearings = async () => {
       try {
-        const response = await fetch('/api/hearings');
+        const response = await fetch('/api/hearings', { credentials: 'include' });
         const data = await response.json();
-        setHearings(data.hearings);
+        setHearings(data.hearings || []);
       } catch (error) {
         console.error('Error fetching hearings:', error);
       }
@@ -50,29 +49,40 @@ const RegistrarHearingSchedule = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
-    if (editingHearing) {
-      try {
-        await updateVenueApi(editingHearing.hearingid, hearingForm.venue);
-        setHearings(hearings.map(h =>
-          h.hearingid === editingHearing.hearingid ? { ...h, courtroomno: hearingForm.venue } : h
-        ));
-        setShowModal(false);
-        setEditingHearing(null);
-        setHearingForm({
-          caseName: '',
-          date: '',
-          time: '',
-          venue: '',
-          judge: '',
-          status: 'Scheduled'
-        });
-      } catch {
-        // error handled in updateVenueApi
+    if (!editingHearing) return;
+    try {
+      const updates = [];
+      if (hearingForm.venue !== (editingHearing.courtroomno || '')) {
+        updates.push(updateVenueApi(editingHearing.hearingid, hearingForm.venue));
       }
-    } else {
-      // Add new hearing logic if you want, currently omitted
+      const currentStatus = (editingHearing.hearingstatus || editingHearing.status || 'scheduled').toLowerCase();
+      if (hearingForm.status.toLowerCase() !== currentStatus) {
+        updates.push(
+          fetch(`/api/hearings/${editingHearing.hearingid}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ status: hearingForm.status }),
+          })
+        );
+      }
+      await Promise.all(updates);
+      setHearings(hearings.map(h =>
+        h.hearingid === editingHearing.hearingid
+          ? { ...h, courtroomno: hearingForm.venue, status: hearingForm.status, hearingstatus: hearingForm.status.toLowerCase() }
+          : h
+      ));
+      setShowModal(false);
+      setEditingHearing(null);
+      setHearingForm({ caseName: '', date: '', time: '', venue: '', judge: '', status: 'Scheduled' });
+    } catch {
+      // errors handled in updateVenueApi
     }
+  };
+
+  const statusLabel = (s) => {
+    const map = { scheduled: 'Scheduled', completed: 'Completed', adjourned: 'Adjourned', cancelled: 'Cancelled' };
+    return map[(s || '').toLowerCase()] || 'Scheduled';
   };
 
   const handleEdit = (hearing) => {
@@ -83,7 +93,7 @@ const RegistrarHearingSchedule = () => {
       time: hearing.hearingtime || '',
       venue: hearing.courtroomno || '',
       judge: hearing.judgename || '',
-      status: hearing.status || 'Scheduled'
+      status: statusLabel(hearing.hearingstatus || hearing.status),
     });
     setShowModal(true);
   };
@@ -127,13 +137,11 @@ const RegistrarHearingSchedule = () => {
                     <td>{hearing.courtroomno || 'N/A'}</td>
                     <td>{hearing.judgename || 'N/A'}</td>
                     <td>
-                      <Badge bg={
-                        hearing.status === 'Scheduled' ? 'success' :
-                        hearing.status === 'Pending' ? 'warning' :
-                        'secondary'
-                      }>
-                        {hearing.status || 'N/A'}
-                      </Badge>
+                      {(() => {
+                        const s = (hearing.hearingstatus || hearing.status || 'scheduled').toLowerCase();
+                        const bg = s === 'scheduled' ? 'primary' : s === 'completed' ? 'success' : s === 'adjourned' ? 'warning' : 'secondary';
+                        return <Badge bg={bg}>{statusLabel(s)}</Badge>;
+                      })()}
                     </td>
                     <td>
                       <Button
@@ -141,7 +149,7 @@ const RegistrarHearingSchedule = () => {
                         size="sm"
                         onClick={() => handleEdit(hearing)}
                       >
-                        {hearing.courtroomno ? 'Edit Venue' : 'Add Venue'}
+                        Update
                       </Button>
                     </td>
                   </tr>
@@ -154,9 +162,7 @@ const RegistrarHearingSchedule = () => {
 
       <Modal show={showModal} onHide={() => setShowModal(false)} centered>
         <Modal.Header closeButton>
-          <Modal.Title>
-            {editingHearing && editingHearing.courtroomno ? 'Edit Venue' : 'Add Venue'}
-          </Modal.Title>
+          <Modal.Title>Update Hearing</Modal.Title>
         </Modal.Header>
         <Form onSubmit={handleSubmit}>
           <Modal.Body>
@@ -210,12 +216,11 @@ const RegistrarHearingSchedule = () => {
               <Form.Label>Status</Form.Label>
               <Form.Select
                 value={hearingForm.status}
-                readOnly
-                disabled
+                onChange={(e) => setHearingForm({ ...hearingForm, status: e.target.value })}
               >
                 <option value="Scheduled">Scheduled</option>
-                <option value="Pending">Pending</option>
                 <option value="Completed">Completed</option>
+                <option value="Adjourned">Adjourned</option>
                 <option value="Cancelled">Cancelled</option>
               </Form.Select>
             </Form.Group>
@@ -225,7 +230,7 @@ const RegistrarHearingSchedule = () => {
               Cancel
             </Button>
             <Button variant="primary" type="submit">
-              {editingHearing && editingHearing.courtroomno ? 'Update Venue' : 'Add Venue'}
+              Save Changes
             </Button>
           </Modal.Footer>
         </Form>

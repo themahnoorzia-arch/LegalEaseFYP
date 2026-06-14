@@ -5,8 +5,7 @@ import psycopg2
 import psycopg2.extras
 
 from blueprints.cases import cases_bp
-from db.db import SessionLocal, get_pg_connection
-from models import Cases, Judge, Lawyer, Caseparticipant
+from db.db import get_pg_connection
 
 
 @cases_bp.route("/hearings", methods=["GET"])
@@ -24,7 +23,7 @@ def get_hearings():
             cur.execute(
                 """
                 SELECT h.hearingid, h.hearingdate, h.hearingtime, h.venue,
-                       h.remarks, c.caseid, c.title AS casename,
+                       h.remarks, h.hearingstatus, c.caseid, c.title AS casename,
                        ct.courtname
                 FROM hearings h
                 JOIN cases c ON h.caseid = c.caseid
@@ -40,7 +39,8 @@ def get_hearings():
             cur.execute(
                 """
                 SELECT h.hearingid, h.hearingdate, h.hearingtime, h.venue,
-                       h.remarks, c.title AS casename, ct.courtname
+                       h.remarks, h.hearingstatus, c.caseid, c.title AS casename,
+                       ct.courtname
                 FROM hearings h
                 JOIN cases c ON h.caseid = c.caseid
                 JOIN caselawyeraccess cla ON cla.caseid = c.caseid
@@ -56,7 +56,8 @@ def get_hearings():
             cur.execute(
                 """
                 SELECT h.hearingid, h.hearingdate, h.hearingtime, h.venue,
-                       h.remarks, c.title AS casename, ct.courtname
+                       h.remarks, h.hearingstatus, c.caseid, c.title AS casename,
+                       ct.courtname
                 FROM hearings h
                 JOIN cases c ON h.caseid = c.caseid
                 JOIN caseparticipantaccess cpa ON cpa.caseid = c.caseid
@@ -72,7 +73,8 @@ def get_hearings():
             cur.execute(
                 """
                 SELECT h.hearingid, h.hearingdate, h.hearingtime, h.venue,
-                       h.remarks, c.title AS casename, ct.courtname
+                       h.remarks, h.hearingstatus, c.caseid, c.title AS casename,
+                       ct.courtname
                 FROM hearings h
                 JOIN cases c ON h.caseid = c.caseid
                 LEFT JOIN courtaccess ca ON ca.caseid = c.caseid
@@ -103,6 +105,7 @@ def get_hearings():
                 ),
                 "venue": hearing.get("venue"),
                 "remarks": hearing.get("remarks") or "",
+                "hearingstatus": hearing.get("hearingstatus") or "scheduled",
             })
 
         return jsonify({"hearings": result}), 200
@@ -173,6 +176,27 @@ def schedule_hearing():
             (caseid, next_hid, judgeid, hearingdate, hearingtime, remarks),
         )
         conn.commit()
+
+        # Notify lawyers and clients on the case
+        try:
+            from utils.notifications import push_notification
+            cur.execute(
+                "SELECT l.userid FROM lawyer l JOIN caselawyeraccess cla ON cla.lawyerid = l.lawyerid WHERE cla.caseid = %s",
+                (caseid,),
+            )
+            for row in cur.fetchall():
+                push_notification(row[0], "Hearing Scheduled",
+                    f'A hearing has been scheduled for case "{casetitle}" on {hearingdate}.', "info", caseid)
+            cur.execute(
+                "SELECT cp.userid FROM caseparticipant cp JOIN caseparticipantaccess cpa ON cpa.participantid = cp.participantid WHERE cpa.caseid = %s",
+                (caseid,),
+            )
+            for row in cur.fetchall():
+                push_notification(row[0], "Hearing Scheduled",
+                    f'A hearing has been scheduled for your case "{casetitle}" on {hearingdate}.', "info", caseid)
+        except Exception:
+            pass
+
         return jsonify({"message": "Hearing scheduled successfully"}), 201
 
     except Exception as e:
@@ -208,6 +232,65 @@ def update_hearing_remarks():
             return jsonify({"error": "Hearing not found"}), 404
         conn.commit()
         return jsonify({"message": "Remarks updated successfully"}), 200
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if conn:
+            conn.close()
+
+
+@cases_bp.route("/hearings/<int:hearing_id>/status", methods=["PATCH"])
+@login_required
+def update_hearing_status(hearing_id):
+    if current_user.role not in ("CourtRegistrar", "Judge", "Admin"):
+        return jsonify({"error": "Access denied"}), 403
+
+    data = request.get_json() or {}
+    new_status = data.get("status", "").strip()
+    valid_statuses = ["scheduled", "completed", "adjourned", "cancelled"]
+    if new_status.lower() not in valid_statuses:
+        return jsonify({"error": f"Status must be one of: {', '.join(valid_statuses)}"}), 400
+
+    conn = None
+    try:
+        conn = get_pg_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE hearings SET hearingstatus = %s WHERE hearingid = %s",
+            (new_status.lower(), hearing_id),
+        )
+        if cur.rowcount == 0:
+            return jsonify({"error": "Hearing not found"}), 404
+        conn.commit()
+
+        # Notify lawyers and clients on the case
+        try:
+            from utils.notifications import push_notification
+            cur.execute("SELECT caseid FROM hearings WHERE hearingid = %s", (hearing_id,))
+            h = cur.fetchone()
+            if h:
+                cid = h[0]
+                label = new_status.capitalize()
+                cur.execute(
+                    "SELECT l.userid FROM lawyer l JOIN caselawyeraccess cla ON cla.lawyerid = l.lawyerid WHERE cla.caseid = %s",
+                    (cid,),
+                )
+                for row in cur.fetchall():
+                    push_notification(row[0], "Hearing Updated",
+                        f"A hearing status has been updated to {label}.", "info", hearing_id)
+                cur.execute(
+                    "SELECT cp.userid FROM caseparticipant cp JOIN caseparticipantaccess cpa ON cpa.participantid = cp.participantid WHERE cpa.caseid = %s",
+                    (cid,),
+                )
+                for row in cur.fetchall():
+                    push_notification(row[0], "Hearing Updated",
+                        f"The status of a hearing on your case has been updated to {label}.", "info", hearing_id)
+        except Exception:
+            pass
+
+        return jsonify({"message": "Hearing status updated"}), 200
     except Exception as e:
         if conn:
             conn.rollback()

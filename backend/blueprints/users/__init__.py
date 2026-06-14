@@ -7,3 +7,4 @@ users_bp = Blueprint(
 )
 
 from . import routes
+from . import admin_routes
